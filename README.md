@@ -267,8 +267,8 @@ The MC-Dropout settings live in `CmapssConfig` (`pipeline.py`):
 
 | Field | Default | Source |
 | --- | --- | --- |
-| `dropout_rate` | 0.1 | fixed by the spec (GroupiSP/stagereg#173) |
-| `num_draws` | 100 | fixed by the spec |
+| `dropout_rate` | 0.5 | chosen |
+| `num_draws` | 100 | fixed by the spec (GroupiSP/stagereg#173) |
 | `gamma_hidden_channels` | 4 | chosen, [below](#the-variance-network) |
 | `gamma_weight_decay` | 0.1 | chosen, [below](#the-variance-network) |
 | `proxy_variance_floor_cycles` | 5.0 | chosen, see [the proxy-variance mean stage](#the-proxy-variance-mean-stage) |
@@ -287,11 +287,6 @@ with AdamW weight decay 0.1, which shrinks it toward a constant variance;
 `staged+mcd` and `staged+mcd+proxy` then re-fit it to the posterior
 predictive's mean. A much larger decay flattens the band to almost a
 constant.
-
-What no variance network fixes is the mean's bias on long lifetimes: past a
-true RUL of 200 the mean levels off around 150, and the validation coverage
-there is low. That error is absent from the training residuals the variance
-is fitted to.
 
 ##### The proxy-variance mean stage
 
