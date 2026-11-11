@@ -184,6 +184,14 @@ def test_evaluate_test_metrics_accepts_extra_epoch_metrics(
     assert metrics["nll"] == pytest.approx(0.5 * math.log(2.0 * math.pi), rel=1e-5)
 
 
+def test_cmapss_config_holds_out_thirty_percent_of_the_units(
+    cmapss_pipeline: ModuleType,
+) -> None:
+    # The staged models' Gamma stage fits the validation split's residuals,
+    # so it holds out about 30 of FD001's 100 training units.
+    assert cmapss_pipeline.CmapssConfig().validation_fraction == 0.3
+
+
 def test_cmapss_config_rejects_invalid_values(cmapss_pipeline: ModuleType) -> None:
     with pytest.raises(ValueError, match="window_length and batch_size"):
         cmapss_pipeline.CmapssConfig(window_length=0)

@@ -45,3 +45,7 @@ _Avoid_: Confidence interval (this is an interval over a predicted value, not ov
 **Epistemic band**:
 The 2.5% and 97.5% quantiles, at each window, of a posterior predictive's draws' means, ignoring their aleatoric variance: how much the dropout draws disagree about the mean, i.e. the model's uncertainty about the function itself. It lies inside the predictive interval, but the gap between the two is not the aleatoric part, since quantile widths do not add.
 _Avoid_: Model uncertainty interval, credible interval
+
+**Held-out residuals**:
+A mean model's squared residuals on windows it never trained on: in `compare.py`, the validation split's. The staged models' Gamma variance stage fits these rather than the in-sample residuals on the train split, which understate the held-out error and so give too small a variance.
+_Avoid_: Validation residuals (ambiguous with monitoring), out-of-fold residuals (no folds here), OOF

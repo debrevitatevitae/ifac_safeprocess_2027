@@ -82,13 +82,13 @@ and scale together. The mean and joint networks take a dropout rate.
 
 #### `plots.py`
 
-Builds the RUL curves. `plot_validation_rul_curves` takes the
-standardized validation trajectories, the feature columns, a sequence of
+Builds the RUL curves. `plot_validation_rul_curves` takes standardized
+run-to-failure trajectories, the feature columns, a sequence of
 `LabelledModel`s (a label and a trained model each, predicting a posterior
 predictive), the three units to draw, and the window length, and draws an
 N×3 grid: one row per model, labelled with its name, and one column per
-unit. `compare.py` passes the lifetime-spanning units of the validation
-subset, so the columns are its shortest-, median-, and longest-lifetime
+unit. `compare.py` passes the lifetime-spanning units of the first seed's
+train split, so the columns are its shortest-, median-, and longest-lifetime
 unit in that order; the module itself decides how a RUL curve looks and
 never which units it looks at. Spanning the lifetime range that way lets a
 reader tell whether the model's accuracy and its stated uncertainty behave
@@ -115,13 +115,15 @@ visible as evidence of the Gaussian assumption breaking down near end of
 life. With a save path the figure is written there, otherwise it is
 displayed.
 
-The plotted units are drawn from the **held-out validation subset**, never
-from the units the model trained on: those units are never fitted, so the
-curves are evidence of generalization rather than of memorized fit. They
-also cannot come from the FD001 test split, whose trajectories are
-truncated rather than run to failure — a unit's lifetime, and hence its
-true RUL at every cycle, is only observable for the run-to-failure train
-split the validation subset is carved out of.
+The plotted units come from the **train split**, so every model trained
+on them (the joint model trains on train and validation together, and the
+staged models' mean stage on the train split): the curves are for
+visualization only, not evidence of generalization. The held-out validation
+units are not plotted, since the staged models' Gamma stage fits them and
+the joint model trains on them. The units cannot come from the FD001 test
+split either, whose trajectories are truncated rather than run to failure:
+a unit's lifetime, and hence its true RUL at every cycle, is only
+observable for the run-to-failure train data.
 
 #### `pipeline.py`
 
@@ -140,7 +142,9 @@ trains on the standardized targets and is scored and plotted through
 
 The staged training functions are `train_mean_model`, which takes an
 optional `dropout_rate` and per-window `objective`, and `train_gamma_model`,
-which trains the Gamma network on the mean network's squared residuals.
+which trains the Gamma network on the mean network's squared residuals on
+the windows it is given; `compare.py` gives it the held-out validation
+windows.
 Both take their event sinks as a parameter, so each caller decides how
 verbose training is. The Gamma network is narrower than the mean network
 (`gamma_hidden_channels`, default 4 against `hidden_channels` 16) and trains
@@ -161,7 +165,7 @@ which carries no sampling noise.
 
 #### `compare.py`
 
-Compares three **MC-Dropout models** on the same prepared FD001 data: a
+Compares three **MC-Dropout models** on the same FD001 data budget: a
 single training (joint) against separate trainings (staged), and the
 staged model with a proxy-variance mean stage. Each is trained once with
 dropout active and predicts with dropout active, as a posterior predictive
@@ -170,15 +174,16 @@ order:
 
 | Column | Model | How it is trained | Predictive distribution |
 | --- | --- | --- | --- |
-| `joint+mcd` | joint MC-Dropout | one Gaussian-head CNN with dropout, on the Gaussian NLL | posterior predictive, each draw with its own aleatoric variance |
-| `staged+mcd` | staged MC-Dropout | a mean stage with dropout, a Gamma stage on its residuals, an inference-only posterior stage (`MCDropout`), then the Gamma network re-fitted to the posterior predictive's mean | posterior predictive, all draws sharing the re-fitted aleatoric variance |
+| `joint+mcd` | joint MC-Dropout | one Gaussian-head CNN with dropout, on the Gaussian NLL, over train ∪ validation with no validation monitoring | posterior predictive, each draw with its own aleatoric variance |
+| `staged+mcd` | staged MC-Dropout | a mean stage with dropout on the train split, a Gamma stage on its held-out residuals on the validation split, an inference-only posterior stage (`MCDropout`), then the Gamma network re-fitted to the held-out residuals of the posterior predictive's mean | posterior predictive, all draws sharing the re-fitted aleatoric variance |
 | `staged+mcd+proxy` | staged MC-Dropout proxy-variance | as `staged+mcd`, with the mean stage trained on `ProxyVarianceNLL` | as `staged+mcd` |
 
-The data is prepared once, with the configured seed, so the
-train/validation split is the same for every seed; seed index `i`
-initializes every model, and its dropout masks, from `seed + i`.
-`compare_models` returns one `SeedComparison` per seed, holding the trained
-models and their test metrics: RMSE, 95% interval coverage, closed-form
+The data is prepared once per seed: seed index `i` draws the
+train/validation split (30% of the units held out, `validation_fraction`),
+fits the standardization on that train split, and initializes every model,
+and its dropout masks, from `seed + i`. `compare_models` returns one
+`SeedComparison` per seed, holding its prepared data, the trained models
+and their test metrics: RMSE, 95% interval coverage, closed-form
 CRPS and NLL, each on the exact mixture (mixture log-density, coverage from
 mixture quantiles, the mixture's closed-form CRPS), through
 `PosteriorPredictivePredictor`.
@@ -200,7 +205,8 @@ uv run python scripts/cmapss/compare.py --seeds 10
 ```
 
 Finally it plots the first seed's RUL curves for the shortest-, median-,
-and longest-lifetime held-out validation units: one row per model, in
+and longest-lifetime units of its train split, in-sample for every model:
+one row per model, in
 column order, with a shared time axis in each column. Using the first seed
 keeps the figure reproducible. Pass `--plot-path` to save that figure
 instead of displaying it:
@@ -218,7 +224,10 @@ the parameter count.
 
 Dropout is the only regularizer of the joint network and of the staged
 mean network: neither has a prior, weight decay or early stopping. The
-joint and staged paths differ only in single against separate training.
+joint and staged paths differ only in single against separate training,
+and see the same data: the joint network trains on train ∪ validation,
+and the staged model trains its mean on the train split and its Gamma
+stage on the validation split.
 
 `joint+mcd` is one Gaussian-head CNN trained with dropout, with
 `run_supervised` on the Gaussian NLL for `joint_epochs` epochs at
@@ -228,8 +237,11 @@ draw's own mean and aleatoric variance: a posterior predictive scored on its
 exact mixture. The masks come from a fixed key derived from the seed, so
 test scoring and the figure use the same draws.
 
-`staged+mcd` trains its mean network with dropout, for `mean_epochs`
-epochs at `learning_rate`, then a Gamma network on its squared residuals. A
+`staged+mcd` trains its mean network with dropout on the train split, for
+`mean_epochs` epochs at `learning_rate`, with the validation split
+monitoring it, then a Gamma network on its **held-out residuals**: its
+squared residuals on the validation split, which the mean never trained
+on (ADR 0001). A
 `PosteriorStage` with the `MCDropout` inference method then does inference
 only: its optimizer is `optax.set_to_zero()`, so the posterior is the
 trained mean network, unchanged, under random dropout masks.
@@ -238,7 +250,8 @@ evaluates the training loss. The posterior predictive's mean, the average
 over the draws, is not the mean network with dropout off that the Gamma
 network was fitted to, so `refit_gamma_to_posterior_mean` trains a fresh
 Gamma network, from the same initialization and with the same width and
-weight decay, on the squared residuals of the posterior predictive's mean.
+weight decay, on the held-out residuals of the posterior predictive's
+mean.
 The prediction is the stage's posterior predictive with `num_draws` draws
 under the same fixed, seed-derived key, every draw sharing the re-fitted
 aleatoric variance.
@@ -275,12 +288,12 @@ The MC-Dropout settings live in `CmapssConfig` (`pipeline.py`):
 
 ##### The variance network
 
-The test split holds only each unit's last window, so it says little about
-early-life uncertainty. The held-out validation units span whole lifetimes,
-and on them a Gamma network as wide as the mean network, trained with plain
-Adam, is overconfident: in-sample residuals understate the held-out error,
-and a flexible Gamma network fits them closely, giving a spiky,
-overconfident variance.
+The Gamma stage fits held-out residuals, so its variance tracks the
+held-out error rather than the smaller in-sample one (ADR 0001). Those come
+from only the ~30 validation units, and nothing is left over to validate
+the Gamma stage itself: a Gamma network as wide as the mean network,
+trained with plain Adam, can fit those few units closely, giving a spiky
+variance.
 
 The defaults therefore narrow the Gamma network to 4 channels and train it
 with AdamW weight decay 0.1, which shrinks it toward a constant variance;

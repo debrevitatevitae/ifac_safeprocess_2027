@@ -97,7 +97,8 @@ class CmapssConfig:
     Attributes:
         window_length: Number of cycles per sliding window.
         validation_fraction: Fraction of training units held out for
-            validation, grouped by whole unit ID.
+            validation, grouped by whole unit ID. The staged models' Gamma
+            stage fits the held-out residuals on these units.
         batch_size: Number of windows per mini-batch.
         hidden_channels: Convolutional channel width of the mean and joint
             networks.
@@ -106,10 +107,13 @@ class CmapssConfig:
         mean_epochs: Number of Stage-1 mean-model training epochs.
         variance_epochs: Number of Stage-2 Gamma-model training epochs.
         gamma_hidden_channels: Convolutional channel width of the Gamma
-            model, kept below `hidden_channels` so the variance does not
-            overfit the in-sample squared residuals.
+            model, kept below `hidden_channels` because it fits the
+            held-out residuals of only the ~30 validation units, with no
+            further validation set to stop it from overfitting them.
         gamma_weight_decay: AdamW decoupled weight decay of the Gamma
-            model's training, which shrinks it toward a constant variance.
+            model's training, which shrinks it toward a constant variance:
+            with no validation set for the Gamma stage, it is that stage's
+            only regularization.
         joint_epochs: Number of training epochs of the joint MC-Dropout
             model.
         dropout_rate: Dropout rate, in `[0, 1)`, of the MC-Dropout models'
@@ -125,7 +129,7 @@ class CmapssConfig:
     """
 
     window_length: int = 30
-    validation_fraction: float = 0.2
+    validation_fraction: float = 0.3
     batch_size: int = 32
     hidden_channels: int = 16
     kernel_size: int = 5
@@ -387,8 +391,8 @@ def train_mean_model(
 
 def train_gamma_model(
     state: TrainingState,
-    train_windows: np.ndarray,
-    train_targets: np.ndarray,
+    windows: np.ndarray,
+    targets: np.ndarray,
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
@@ -396,18 +400,21 @@ def train_gamma_model(
     """Train a 1D-CNN Gamma model through `GammaVarianceStage`.
 
     Consumes the frozen, already-trained Stage-1 mean model's squared
-    residuals on the training split, per `GammaVarianceStage`'s contract.
+    residuals on the windows given, per `GammaVarianceStage`'s contract.
+    Pass held-out windows the mean never trained on: in-sample residuals
+    understate the held-out error, so a variance fit to them is too small.
     The network is `config.gamma_hidden_channels` wide and trained with
-    AdamW at `config.gamma_weight_decay`: in-sample residuals understate the
-    held-out error, and a full-width, unregularized Gamma network overfits
-    them into a spiky, overconfident variance.
+    AdamW at `config.gamma_weight_decay`: the held-out units are few, and
+    with no validation set for this stage, a full-width, unregularized Gamma
+    network overfits them into a spiky variance.
 
     Args:
         state: The `MEAN_READY` staged training state produced by
             `train_mean_model`.
-        train_windows: Training sliding windows, shape `(n_train,
-            window_length, n_sensors)`.
-        train_targets: Training RUL targets, shape `(n_train,)`.
+        windows: The sliding windows whose residuals the Gamma
+            network fits, shape `(n_windows, window_length, n_sensors)`;
+            held-out validation windows in the comparison.
+        targets: Their RUL targets, shape `(n_windows,)`.
         config: Example configuration controlling model size and training.
         event_sinks: Sinks notified of the stage's training events; pass
             none to train silently.
@@ -415,7 +422,7 @@ def train_gamma_model(
     Returns:
         The trained `Cnn1DGammaModel`.
     """
-    n_sensors = train_windows.shape[-1]
+    n_sensors = windows.shape[-1]
     model_key = seed_stream_key(config, GAMMA_NETWORK_STREAM)
     model = Cnn1DGammaModel(
         n_sensors,
@@ -427,9 +434,7 @@ def train_gamma_model(
         model,
         optax.adamw(config.learning_rate, weight_decay=config.gamma_weight_decay),
     )
-    train_loader = make_window_loader(
-        train_windows, train_targets, batch_size=config.batch_size
-    )
+    train_loader = make_window_loader(windows, targets, batch_size=config.batch_size)
 
     stage = GammaVarianceStage(
         model=model,
@@ -699,8 +704,8 @@ class RefitVariancePredictive(nnx.Module, pytree=False):
 
 def refit_gamma_to_posterior_mean(
     predictive: PosteriorStagePredictive,
-    train_windows: np.ndarray,
-    train_targets: np.ndarray,
+    windows: np.ndarray,
+    targets: np.ndarray,
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
@@ -716,8 +721,9 @@ def refit_gamma_to_posterior_mean(
 
     Args:
         predictive: The posterior stage's predictive.
-        train_windows: Training sliding windows.
-        train_targets: Training RUL targets.
+        windows: The windows whose residuals the Gamma network fits;
+            held-out validation windows in the comparison.
+        targets: Their RUL targets.
         config: Example configuration.
         event_sinks: Sinks notified of the Gamma stage's training events.
 
@@ -729,7 +735,7 @@ def refit_gamma_to_posterior_mean(
     state.parameter_roles["mean_model"] = ParameterRole.MEAN
     state.lifecycle_state = StageState.MEAN_READY
     variance_model = train_gamma_model(
-        state, train_windows, train_targets, config, event_sinks=event_sinks
+        state, windows, targets, config, event_sinks=event_sinks
     )
     return RefitVariancePredictive(predictive, variance_model)
 
