@@ -1,0 +1,19 @@
+[project]
+name = "ifac-safeprocess-2027"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "debrevitatevitae", email = "giotb92@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "stagereg[jax]>=0.6.0",
+]
+
+[project.scripts]
+ifac-safeprocess-2027 = "ifac_safeprocess_2027:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
