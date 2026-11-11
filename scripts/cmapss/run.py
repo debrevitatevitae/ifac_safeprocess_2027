@@ -68,7 +68,7 @@ from preprocessing import (
     select_lifetime_spanning_units,
     split_by_unit,
 )
-
+from stagereg.core.distributions import PredictionLoss
 from stagereg.core.losses import NegativeLogLikelihoodLoss, SquaredErrorLoss
 from stagereg.core.metric_registry import (
     ClosedFormContinuousRankedProbabilityScore,
@@ -76,7 +76,6 @@ from stagereg.core.metric_registry import (
     IntervalCoverage,
     RootMeanSquaredError,
 )
-from stagereg.core.distributions import PredictionLoss
 from stagereg.core.protocols import LoaderFactory
 from stagereg.core.tracking import EventSink, TrainingEvent
 from stagereg.core.types import Batch, ParameterRole, StageState, TrainingState
@@ -153,7 +152,7 @@ class CmapssConfig:
     gamma_hidden_channels: int = 4
     gamma_weight_decay: float = 0.1
     joint_epochs: int = 100
-    dropout_rate: float = 0.1
+    dropout_rate: float = 0.5
     num_draws: int = 100
     proxy_variance_floor_cycles: float = 5.0
     seed: int = 0
