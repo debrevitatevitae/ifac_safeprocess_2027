@@ -35,11 +35,7 @@ import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
-# `preprocessing` is a sibling module, importable because whoever loads
-# this module has already put the example's directory on `sys.path`:
-# `compare.py` when it is run as a script, and the tests when they load it via
-# `importlib`. See issue #24 for making this directory a real package.
-from preprocessing import LifetimeSpanningUnits, build_unit_rul_curve
+from .preprocessing import LifetimeSpanningUnits, build_unit_rul_curve
 
 _TRUE_RUL_LABEL = "True linear RUL"
 _PREDICTED_MEAN_LABEL = "Predicted mean"

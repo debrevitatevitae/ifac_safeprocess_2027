@@ -1,6 +1,6 @@
 """Compare the joint and staged MC-Dropout models on CMAPSS FD001 over several seeds.
 
-Prepares the FD001 data once, exactly as `pipeline.py` does, then for each
+Prepares the FD001 data once, exactly as `ifac_safeprocess_2027.cmapss.pipeline` does, then for each
 seed trains three MC-Dropout models on it. Each trains once with dropout
 active, its only regularizer, and predicts with dropout active, as a
 posterior predictive over fixed dropout-mask sets:
@@ -43,28 +43,25 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from flax import nnx
-
-# Allow sibling-module imports both when run as a script and when loaded
-# from an arbitrary working directory, e.g. via `importlib` in tests.
-_MODULE_DIR = Path(__file__).resolve().parent
-if str(_MODULE_DIR) not in sys.path:
-    sys.path.insert(0, str(_MODULE_DIR))
-
-from model import Cnn1DGaussianModel
-from plots import LabelledModel, plot_validation_rul_curves
-from preprocessing import (
-    fit_proxy_variance_schedule,
-    select_lifetime_spanning_units,
-    unit_lifetimes,
+from stagereg.core import NegativeLogLikelihood, NegativeLogLikelihoodLoss
+from stagereg.core.distributions import PredictionLoss
+from stagereg.core.metric_registry import EpochMetric
+from stagereg.core.tracking import EventSink
+from stagereg.jax import (
+    HeldOutValidation,
+    initialize_training_state,
+    make_supervised_loss,
+    run_supervised,
 )
-from run import (
+
+from ifac_safeprocess_2027.cmapss.model import Cnn1DGaussianModel
+from ifac_safeprocess_2027.cmapss.pipeline import (
     TEST_METRICS,
     CmapssConfig,
     CyclesPredictive,
@@ -79,15 +76,11 @@ from run import (
     train_gamma_model,
     train_mean_model,
 )
-from stagereg.core import NegativeLogLikelihood, NegativeLogLikelihoodLoss
-from stagereg.core.distributions import PredictionLoss
-from stagereg.core.metric_registry import EpochMetric
-from stagereg.core.tracking import EventSink
-from stagereg.jax import (
-    HeldOutValidation,
-    initialize_training_state,
-    make_supervised_loss,
-    run_supervised,
+from ifac_safeprocess_2027.cmapss.plots import LabelledModel, plot_validation_rul_curves
+from ifac_safeprocess_2027.cmapss.preprocessing import (
+    fit_proxy_variance_schedule,
+    select_lifetime_spanning_units,
+    unit_lifetimes,
 )
 
 COMPARISON_METRICS: tuple[EpochMetric, ...] = (*TEST_METRICS, NegativeLogLikelihood())

@@ -1,10 +1,8 @@
-"""Tests for the CMAPSS 1D-CNN mean model."""
+"""Tests for the CMAPSS 1D-CNN networks."""
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
+import importlib
 
 import pytest
 from hypothesis import given, settings
@@ -13,13 +11,7 @@ from hypothesis import strategies as st
 jax = pytest.importorskip("jax")
 nnx = pytest.importorskip("flax.nnx")
 
-_MODEL_PATH = Path(__file__).parents[2] / "scripts" / "cmapss" / "model.py"
-_SPEC = importlib.util.spec_from_file_location("cmapss_model", _MODEL_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError("could not load the CMAPSS model module.")
-_MODEL = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _MODEL
-_SPEC.loader.exec_module(_MODEL)
+_MODEL = importlib.import_module("ifac_safeprocess_2027.cmapss.model")
 
 
 def test_cnn1d_mean_model_outputs_one_scalar_per_example() -> None:

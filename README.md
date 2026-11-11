@@ -6,11 +6,21 @@ Install the environment with `uv sync --all-groups` and run the tests with `uv r
 
 ## NASA CMAPSS FD001
 
-The scripts in `scripts/cmapss/` focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
+The code in `src/ifac_safeprocess_2027/cmapss/` and the `scripts/cmapss/compare.py` script focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
 
 In particular, the scope is restricted to the FD001 dataset, which consists of 100 train and 100 test time trajectories. The train trajectories are run-to-failure, while the test trajectories are partial histories for which the RUL labels are provided in a separate file.
 
 ### Description of the files
+
+```text
+scripts/cmapss/compare.py          the entry point: trains, scores and plots the models
+src/ifac_safeprocess_2027/cmapss/
+├── data.py                        fetching and loading FD001
+├── preprocessing.py               splitting, standardization and windowing
+├── model.py                       the 1D-CNN networks
+├── pipeline.py                    configuration, training and test scoring
+└── plots.py                       RUL curves
+```
 
 #### `data.py`
 
@@ -33,7 +43,7 @@ override the defaults:
 Run the module with:
 
 ```shell
-uv run python scripts/cmapss/data.py
+uv run python -m ifac_safeprocess_2027.cmapss.data
 ```
 
 The `main` function displays all engine trajectories in seaborn line plots,
@@ -113,7 +123,7 @@ truncated rather than run to failure — a unit's lifetime, and hence its
 true RUL at every cycle, is only observable for the run-to-failure train
 split the validation subset is carved out of.
 
-#### `run.py`
+#### `pipeline.py`
 
 The pipeline `compare.py` builds on; it has no entry point of its own.
 `CmapssConfig` holds every setting. `prepare_cmapss_windows` loads the
@@ -253,7 +263,7 @@ of the uncertainty is noise in the data rather than lack of knowledge.
 
 ##### Defaults
 
-The MC-Dropout settings live in `CmapssConfig` (`run.py`):
+The MC-Dropout settings live in `CmapssConfig` (`pipeline.py`):
 
 | Field | Default | Source |
 | --- | --- | --- |
@@ -292,7 +302,7 @@ channels early in life, although the time to failure grows more certain as
 failure nears.
 
 `staged+mcd+proxy` is `staged+mcd` with its mean stage trained and
-validated on `ProxyVarianceNLL` (`run.py`): the Gaussian NLL of the mean
+validated on `ProxyVarianceNLL` (`pipeline.py`): the Gaussian NLL of the mean
 under a fixed, fictitious scale `ProxyVarianceSchedule` (`preprocessing.py`)
 that depends on the window's true RUL `r`:
 

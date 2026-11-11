@@ -355,7 +355,7 @@ def test_format_comparison_table_gives_one_column_per_model_result_in_order(
     [([], 5, None), (["--seeds", "2"], 2, "comparison.png")],
 )
 def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     cmapss_compare: ModuleType,
     mcd_config: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -399,7 +399,7 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
         assert plotted.model is result.model
     assert plot.save_path == plot_path
     assert plot.window_length == mcd_config.window_length
-    assert plot.feature_columns == cmapss_run._SENSOR_NAMES
+    assert plot.feature_columns == cmapss_pipeline._SENSOR_NAMES
     validation = plot.trajectories
     assert plot.units == cmapss_compare.select_lifetime_spanning_units(validation)
     # Every run line and the table are printed before the figure is drawn.

@@ -25,10 +25,8 @@ ground-truth RUL from `RUL_FD001.txt`.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -36,31 +34,6 @@ import numpy as np
 import optax
 import pandas as pd
 from flax import nnx
-
-# Allow sibling-module imports (`data`, `model`, `preprocessing`) both when
-# run as a script and when loaded from an arbitrary working directory, e.g.
-# via `importlib` in tests.
-_MODULE_DIR = Path(__file__).resolve().parent
-if str(_MODULE_DIR) not in sys.path:
-    sys.path.insert(0, str(_MODULE_DIR))
-
-from data import (
-    load_fd001_data,
-    load_fd001_test_data,
-    load_fd001_test_rul,
-)
-from model import Cnn1DGammaModel, Cnn1DGaussianModel, Cnn1DMeanModel
-from preprocessing import (
-    ProxyVarianceSchedule,
-    SensorStandardization,
-    TargetStandardization,
-    apply_standardization,
-    build_last_windows,
-    build_windows,
-    fit_standardization,
-    fit_target_standardization,
-    split_by_unit,
-)
 from stagereg.core.distributions import PredictionLoss
 from stagereg.core.losses import NegativeLogLikelihoodLoss, SquaredErrorLoss
 from stagereg.core.metric_registry import (
@@ -87,6 +60,24 @@ from stagereg.jax import (
     create_optimizer,
     evaluate_loader,
     make_supervised_loss,
+)
+
+from .data import (
+    load_fd001_data,
+    load_fd001_test_data,
+    load_fd001_test_rul,
+)
+from .model import Cnn1DGammaModel, Cnn1DGaussianModel, Cnn1DMeanModel
+from .preprocessing import (
+    ProxyVarianceSchedule,
+    SensorStandardization,
+    TargetStandardization,
+    apply_standardization,
+    build_last_windows,
+    build_windows,
+    fit_standardization,
+    fit_target_standardization,
+    split_by_unit,
 )
 
 _SENSOR_NAMES = [f"sensor_{i}" for i in (11, 12, 4, 7, 15, 20, 21, 2, 17)]
