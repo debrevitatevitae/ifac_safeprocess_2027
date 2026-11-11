@@ -5,7 +5,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from flax import nnx
-
 from stagereg.jax import Gamma, GammaHead, Gaussian, GaussianHead
 
 
@@ -189,52 +188,14 @@ class Cnn1DGammaModel(nnx.Module):
         return self.head(self.backbone(inputs))
 
 
-class CompositeGaussianModel(nnx.Module):
-    """Composite predictive model combining the Stage-1/Stage-2 outputs.
-
-    Combines the frozen Stage-1 point prediction with the Stage-2 Gamma
-    mean (an estimate of the squared-residual, i.e. aleatoric variance)
-    into a single [`Gaussian`][stagereg.jax.Gaussian] predictive distribution.
-    """
-
-    def __init__(
-        self, mean_model: Cnn1DMeanModel, variance_model: Cnn1DGammaModel
-    ) -> None:
-        """Store the trained Stage-1 mean and Stage-2 Gamma variance models.
-
-        Args:
-            mean_model: Trained, frozen Stage-1 point-RUL regressor.
-            variance_model: Trained Stage-2 Gamma residual regressor.
-        """
-        self.mean_model = mean_model
-        self.variance_model = variance_model
-
-    def __call__(self, inputs: jax.Array) -> Gaussian:
-        """Predict a Gaussian RUL distribution for each windowed example.
-
-        Args:
-            inputs: Windowed sensor readings, shape ``(batch, window_length,
-                n_sensors)``.
-
-        Returns:
-            A [`Gaussian`][stagereg.jax.Gaussian] with ``loc`` from Stage 1 and a
-            strictly positive ``scale`` derived from the Stage-2 Gamma mean,
-            each shaped ``(batch, 1)``.
-        """
-        loc = self.mean_model(inputs)
-        variance = self.variance_model(inputs).mean()
-        return Gaussian(loc=loc, scale=jnp.sqrt(variance))
-
-
 class Cnn1DGaussianModel(nnx.Module):
     """Joint model: one 1D-CNN backbone predicting a Gaussian RUL distribution.
 
-    The textbook mean-variance baseline the staged model is compared against:
-    a single `Cnn1DBackbone`, with the same architecture and hyperparameters
-    as each staged model's backbone, followed by a
-    [`GaussianHead`][stagereg.jax.GaussianHead] that predicts mean and scale
-    together. Having one backbone rather than two, it has roughly half the
-    staged model's parameters.
+    The network of the joint MC-Dropout model: a single `Cnn1DBackbone`, with
+    the same architecture and hyperparameters as each staged model's
+    backbone, followed by a [`GaussianHead`][stagereg.jax.GaussianHead] that
+    predicts mean and scale together. Having one backbone rather than two,
+    it has roughly half the staged model's parameters.
     """
 
     def __init__(

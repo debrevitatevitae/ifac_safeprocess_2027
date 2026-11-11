@@ -39,5 +39,9 @@ The shortest-, lower-median-, and longest-lifetime units of a set of run-to-fail
 _Avoid_: Representative units, extreme units, best/worst units (none of the three is chosen for how well the model does on it)
 
 **Predictive interval**:
-The `loc ± 1.96 * scale` band of the composite Gaussian predictive distribution, covering 95% of its mass and left unclipped at zero, so that a band extending below zero remains visible as evidence of the Gaussian assumption breaking down near end of life.
+The central 95% interval of a model's posterior predictive, from the 2.5% and 97.5% quantiles of its mixture over dropout draws, left unclipped at zero, so that a band extending below zero remains visible as evidence of the Gaussian assumption breaking down near end of life. It counts both the aleatoric noise and the spread of the draws; drawn as the *total band*.
 _Avoid_: Confidence interval (this is an interval over a predicted value, not over a parameter estimate)
+
+**Epistemic band**:
+The 2.5% and 97.5% quantiles, at each window, of a posterior predictive's draws' means, ignoring their aleatoric variance: how much the dropout draws disagree about the mean, i.e. the model's uncertainty about the function itself. It lies inside the predictive interval, but the gap between the two is not the aleatoric part, since quantile widths do not add.
+_Avoid_: Model uncertainty interval, credible interval

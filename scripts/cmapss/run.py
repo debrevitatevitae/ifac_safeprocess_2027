@@ -1,30 +1,30 @@
-"""End-to-end CMAPSS FD001 two-stage probabilistic RUL training and evaluation.
+"""The CMAPSS FD001 data preparation, training and evaluation pipeline.
 
-Loads the FD001 training and test splits, builds standardized sliding
-windows and standardized RUL targets, and trains a two-stage probabilistic pipeline through `stagereg`'s
-explicit supervised stages:
+Loads the FD001 training and test splits and builds standardized sliding
+windows and standardized RUL targets (`prepare_cmapss_windows`). Trains the
+staged pipeline through `stagereg`'s explicit supervised stages:
 
-* Stage 1 trains a deterministic 1D-CNN mean model via `MeanStage`.
-* Stage 2 trains an independently-initialized 1D-CNN Gamma model on the
-  frozen Stage-1 model's squared residuals via `GammaVarianceStage`.
+* `train_mean_model` trains a 1D-CNN mean model via `MeanStage`, optionally
+  with dropout and under a proxy-variance objective (`ProxyVarianceNLL`).
+* `train_gamma_model` trains an independently-initialized 1D-CNN Gamma
+  model on the mean model's squared residuals via `GammaVarianceStage`.
+* `build_staged_mcd_posterior` runs an inference-only MC-Dropout posterior
+  stage, and `refit_gamma_to_posterior_mean` re-fits the Gamma network to
+  the posterior predictive's mean.
 
-The frozen Stage-1 point prediction and the Stage-2 Gamma mean are then
-combined into a composite `Gaussian` predictive distribution, mapped back
-to RUL cycles with `CyclesPredictive`, and evaluated end to end against the official FD001 test split with `stagereg`'s
-`MetricSuite`/`GaussianPredictor`/`evaluate_loader` machinery, reporting
-RMSE, 95% interval coverage, and the closed-form CRPS. The test split follows a
+It also builds the joint MC-Dropout predictive (`build_mc_dropout_predictive`),
+maps a model's standardized posterior predictive back to RUL cycles
+(`CyclesPredictive`), and scores it against the official FD001 test split
+on its exact mixture (`evaluate_test_metrics`). The test split follows a
 single-window-per-trajectory protocol: one window per test unit, ending at
 its last observed (possibly truncated) cycle, scored against that unit's
 ground-truth RUL from `RUL_FD001.txt`.
 
-Run it with:
-
-    uv run python scripts/cmapss/run.py
+`compare.py` is the entry point that uses it.
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -49,13 +49,7 @@ from data import (
     load_fd001_test_data,
     load_fd001_test_rul,
 )
-from model import (
-    Cnn1DGammaModel,
-    Cnn1DGaussianModel,
-    Cnn1DMeanModel,
-    CompositeGaussianModel,
-)
-from plots import LabelledModel, plot_validation_rul_curves
+from model import Cnn1DGammaModel, Cnn1DGaussianModel, Cnn1DMeanModel
 from preprocessing import (
     ProxyVarianceSchedule,
     SensorStandardization,
@@ -65,7 +59,6 @@ from preprocessing import (
     build_windows,
     fit_standardization,
     fit_target_standardization,
-    select_lifetime_spanning_units,
     split_by_unit,
 )
 from stagereg.core.distributions import PredictionLoss
@@ -77,20 +70,19 @@ from stagereg.core.metric_registry import (
     RootMeanSquaredError,
 )
 from stagereg.core.protocols import LoaderFactory
-from stagereg.core.tracking import EventSink, TrainingEvent
+from stagereg.core.tracking import EventSink
 from stagereg.core.types import Batch, ParameterRole, StageState, TrainingState
 from stagereg.jax import (
     GammaVarianceStage,
     Gaussian,
-    GaussianPredictor,
     HeldOutValidation,
     MCDropout,
     MeanStage,
     MetricSuite,
     PosteriorPredictive,
+    PosteriorPredictivePredictor,
     PosteriorStage,
     PosteriorStageOptions,
-    Predictor,
     SupervisedStageOptions,
     create_optimizer,
     evaluate_loader,
@@ -104,7 +96,7 @@ TEST_METRICS: tuple[EpochMetric, ...] = (
     IntervalCoverage(level=0.95),
     ClosedFormContinuousRankedProbabilityScore(),
 )
-"""The staged-only run's test metrics: RMSE, 95% coverage, closed-form CRPS."""
+"""The default test metrics: RMSE, 95% coverage and closed-form CRPS."""
 
 
 @dataclass(frozen=True)
@@ -127,8 +119,8 @@ class CmapssConfig:
             overfit the in-sample squared residuals.
         gamma_weight_decay: AdamW decoupled weight decay of the Gamma
             model's training, which shrinks it toward a constant variance.
-        joint_epochs: Number of training epochs for the joint model of the
-            staged-vs-joint comparison, with or without MC-Dropout.
+        joint_epochs: Number of training epochs of the joint MC-Dropout
+            model.
         dropout_rate: Dropout rate, in `[0, 1)`, of the MC-Dropout models'
             backbones: the joint MC-Dropout network and the staged
             MC-Dropout model's mean network, both trained and predicted with
@@ -220,22 +212,6 @@ def make_window_loader(
         ]
 
     return loader
-
-
-class PrintingEventSink:
-    """An event sink that prints a one-line summary per epoch."""
-
-    def on_event(self, event: TrainingEvent) -> None:
-        """Print the stage-qualified epoch metrics for one training event.
-
-        Args:
-            event: The training event to summarize.
-        """
-        values = dict(event.metrics)
-        if event.decision is not None:
-            values[event.decision.metric] = event.decision.value
-        metrics = ", ".join(f"{name}={value:.4f}" for name, value in values.items())
-        print(f"[{event.name}] epoch={event.step} split={event.split} {metrics}")
 
 
 @dataclass(frozen=True)
@@ -768,37 +744,12 @@ def refit_gamma_to_posterior_mean(
     return RefitVariancePredictive(predictive, variance_model)
 
 
-def build_composite_model(
-    mean_model: Cnn1DMeanModel, variance_model: Cnn1DGammaModel
-) -> CompositeGaussianModel:
-    """Assemble an eval-mode composite Gaussian model from two trained stages.
-
-    Both stage models are cloned, so the returned model is independent of
-    the ones the training stages keep mutating, and the composite is put in
-    eval mode. Every consumer of the composite predictive distribution —
-    metrics and plots alike — should obtain it here, so that the
-    clone-and-eval detail cannot drift between call sites.
-
-    Args:
-        mean_model: Trained Stage-1 point-RUL regressor.
-        variance_model: Trained Stage-2 Gamma residual regressor.
-
-    Returns:
-        A `CompositeGaussianModel` over clones of both stage models, in
-        eval mode.
-    """
-    composite = CompositeGaussianModel(nnx.clone(mean_model), nnx.clone(variance_model))
-    composite.eval()
-    return composite
-
-
 class CyclesPredictive(nnx.Module, pytree=False):
     """A model trained on standardized RUL targets, predicting in cycles.
 
-    Maps the wrapped model's standardized predictive back to RUL cycles: a
-    `Gaussian`'s location and scale, or a `PosteriorPredictive`'s draws and
-    aleatoric variance, through the affine inverse of the targets'
-    standardization. Test scoring and the figure compare against RUL in
+    Maps the wrapped model's standardized `PosteriorPredictive` back to RUL
+    cycles: its draws and aleatoric variance, through the affine inverse of
+    the targets' standardization. Test scoring and the figure compare against RUL in
     cycles, so every model they see is wrapped.
     """
 
@@ -808,7 +759,7 @@ class CyclesPredictive(nnx.Module, pytree=False):
         """Wrap a model, without copying it.
 
         Args:
-            model: A model mapping windows to a standardized `Gaussian` or
+            model: A model mapping windows to a standardized
                 `PosteriorPredictive`.
             standardization: The statistics its training targets were
                 standardized with.
@@ -816,26 +767,24 @@ class CyclesPredictive(nnx.Module, pytree=False):
         self.model: nnx.Module = model
         self.standardization: TargetStandardization = standardization
 
-    def __call__(self, inputs: jax.Array) -> Gaussian | PosteriorPredictive:
-        """Predict the wrapped model's distribution, in RUL cycles.
+    def __call__(self, inputs: jax.Array) -> PosteriorPredictive:
+        """Predict the wrapped model's posterior predictive, in RUL cycles.
 
         Args:
             inputs: Windowed sensor readings, shape ``(batch, window_length,
                 n_sensors)``.
 
         Returns:
-            The wrapped model's output, of the same type, in cycles.
+            The wrapped model's posterior predictive, in cycles.
         """
         mean = self.standardization.mean
         scale = self.standardization.scale
         output = self.model(inputs)
-        if isinstance(output, PosteriorPredictive):
-            return PosteriorPredictive(
-                draws=output.draws * scale + mean,
-                aleatoric_variance=output.aleatoric_variance * scale**2,
-                draw_mask=output.draw_mask,
-            )
-        return Gaussian(loc=output.loc * scale + mean, scale=output.scale * scale)
+        return PosteriorPredictive(
+            draws=output.draws * scale + mean,
+            aleatoric_variance=output.aleatoric_variance * scale**2,
+            draw_mask=output.draw_mask,
+        )
 
 
 def evaluate_test_metrics(
@@ -844,33 +793,23 @@ def evaluate_test_metrics(
     test_rul: np.ndarray,
     *,
     epoch_metrics: tuple[EpochMetric, ...] = TEST_METRICS,
-    predictor: Predictor | None = None,
 ) -> dict[str, float]:
-    """Score a model against the FD001 test split.
+    """Score a posterior-predictive model against the FD001 test split.
 
-    By default works for any model whose output is a `Gaussian`, such as the
-    staged model from `build_composite_model`; with a
-    `PosteriorPredictivePredictor()` it scores a model returning a
-    `PosteriorPredictive` on the exact mixture. Scoring goes through
-    `stagereg`'s `MetricSuite`, the predictor, and `evaluate_loader`; the
-    closed-form CRPS needs neither predictive samples nor an evaluation grid,
-    so the scores carry no Monte Carlo noise. No loss is computed.
+    The model is scored on its exact mixture through `stagereg`'s
+    `MetricSuite`, `PosteriorPredictivePredictor` and `evaluate_loader`; the
+    closed-form CRPS needs neither predictive samples nor an evaluation
+    grid, so the scores carry no Monte Carlo noise. No loss is computed.
 
     Args:
-        model: An eval-mode model mapping windows to a `Gaussian` (the
-            default predictor) or to a `PosteriorPredictive`, such as the
-            MC-Dropout models' predictives (with a
-            `PosteriorPredictivePredictor()` as `predictor`).
+        model: A model mapping windows to a `PosteriorPredictive`, such as
+            the MC-Dropout models' predictives.
         test_windows: One trailing window per test unit, shape `(n_units,
             window_length, n_sensors)`.
         test_rul: Ground-truth RUL per test unit, shape `(n_units,)`.
         epoch_metrics: The metrics to report. Defaults to `TEST_METRICS`:
             RMSE (`"rmse"`), 95% interval coverage (`"coverage"`) and the
             closed-form CRPS (`"closed_form_crps"`).
-        predictor: Materializes the metrics' data from the model's output.
-            Defaults to `GaussianPredictor()`; pass a
-            `PosteriorPredictivePredictor()` for a model returning a
-            `PosteriorPredictive`.
 
     Returns:
         A mapping from each metric's name to its value on the test split.
@@ -881,7 +820,7 @@ def evaluate_test_metrics(
 
     metric_suite = MetricSuite(
         epoch=epoch_metrics,
-        predictor=GaussianPredictor() if predictor is None else predictor,
+        predictor=PosteriorPredictivePredictor(),
     )
     # No metric draws predictive samples, so the key never affects a score.
     metrics, _ = evaluate_loader(
@@ -987,68 +926,3 @@ def prepare_cmapss_windows(config: CmapssConfig) -> PreparedCmapssData:
         standardization=stats,
         target_standardization=target_stats,
     )
-
-
-def main() -> None:
-    """Train the two-stage CMAPSS pipeline, print test metrics, and plot RUL curves.
-
-    Pass `--plot-path` to save the RUL-curves figure to that path instead of displaying
-    it interactively.
-    """
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--plot-path",
-        type=Path,
-        default=None,
-        help=(
-            "Save the validation RUL-curves figure to this path instead of "
-            "displaying it."
-        ),
-    )
-    args = parser.parse_args()
-
-    config = CmapssConfig()
-    prepared = prepare_cmapss_windows(config)
-
-    mean_model, state = train_mean_model(
-        prepared.train_windows,
-        prepared.train_targets,
-        prepared.validation_windows,
-        prepared.validation_targets,
-        config,
-        event_sinks=[PrintingEventSink()],
-    )
-    variance_model = train_gamma_model(
-        state,
-        prepared.train_windows,
-        prepared.train_targets,
-        config,
-        event_sinks=[PrintingEventSink()],
-    )
-
-    staged_model = CyclesPredictive(
-        build_composite_model(mean_model, variance_model),
-        prepared.target_standardization,
-    )
-    metrics = evaluate_test_metrics(
-        staged_model,
-        prepared.test_windows,
-        prepared.test_rul,
-    )
-    print(f"FD001 test RMSE: {metrics['rmse']:.4f}")
-    print(f"FD001 test 95% interval coverage: {metrics['coverage']:.4f}")
-    print(f"FD001 test closed-form CRPS: {metrics['closed_form_crps']:.4f}")
-
-    validation_trajectories = prepared.validation_trajectories
-    plot_validation_rul_curves(
-        validation_trajectories,
-        _SENSOR_NAMES,
-        [LabelledModel("Staged model", staged_model)],
-        units=select_lifetime_spanning_units(validation_trajectories),
-        window_length=config.window_length,
-        save_path=args.plot_path,
-    )
-
-
-if __name__ == "__main__":
-    main()

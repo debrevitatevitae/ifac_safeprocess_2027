@@ -67,22 +67,6 @@ def test_cnn1d_gamma_model_outputs_one_gamma_distribution_per_example() -> None:
     assert bool(jax.numpy.all(prediction.rate > 0))
 
 
-def test_composite_gaussian_model_has_strictly_positive_variance() -> None:
-    batch_size, window_length, n_sensors = 4, 30, 9
-    mean_model = _MODEL.Cnn1DMeanModel(n_sensors, rngs=nnx.Rngs(0))
-    variance_model = _MODEL.Cnn1DGammaModel(n_sensors, rngs=nnx.Rngs(1))
-    composite = _MODEL.CompositeGaussianModel(mean_model, variance_model)
-    inputs = jax.random.normal(
-        jax.random.key(2), (batch_size, window_length, n_sensors)
-    )
-
-    prediction = composite(inputs)
-
-    assert prediction.loc.shape == (batch_size, 1)
-    assert prediction.scale.shape == (batch_size, 1)
-    assert bool(jax.numpy.all(prediction.variance() > 0))
-
-
 _DROPOUT_MODELS = ("Cnn1DMeanModel", "Cnn1DGaussianModel")
 """The CMAPSS models that accept a dropout rate."""
 

@@ -1,17 +1,14 @@
-"""Tests for the CMAPSS end-to-end mean-stage training and evaluation."""
+"""Tests for the CMAPSS data preparation, training and evaluation pipeline."""
 
 from __future__ import annotations
 
 import dataclasses
 import math
-import sys
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -24,7 +21,7 @@ nnx = pytest.importorskip("flax.nnx")
 pytest.importorskip("optax")
 
 
-def test_train_gamma_model_and_evaluate_test_metrics_end_to_end(
+def test_staged_mcd_pipeline_and_evaluate_test_metrics_end_to_end(
     cmapss_run: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
@@ -33,24 +30,27 @@ def test_train_gamma_model_and_evaluate_test_metrics_end_to_end(
     train_windows, train_targets = synthetic_windows(rng, 64)
     validation_windows, validation_targets = synthetic_windows(rng, 16)
     test_windows, test_rul = synthetic_windows(rng, 10)
-    config = tiny_cmapss_config
+    config = dataclasses.replace(tiny_cmapss_config, dropout_rate=0.2, num_draws=8)
 
-    mean_model, state = cmapss_run.train_mean_model(
+    _, state = cmapss_run.train_mean_model(
         train_windows,
         train_targets,
         validation_windows,
         validation_targets,
         config,
         event_sinks=(),
+        dropout_rate=config.dropout_rate,
     )
-    variance_model = cmapss_run.train_gamma_model(
+    cmapss_run.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
     )
-    metrics = cmapss_run.evaluate_test_metrics(
-        cmapss_run.build_composite_model(mean_model, variance_model),
-        test_windows,
-        test_rul,
+    posterior = cmapss_run.build_staged_mcd_posterior(
+        state, train_windows, train_targets, config, event_sinks=()
     )
+    model = cmapss_run.refit_gamma_to_posterior_mean(
+        posterior, train_windows, train_targets, config, event_sinks=()
+    )
+    metrics = cmapss_run.evaluate_test_metrics(model, test_windows, test_rul)
 
     assert set(metrics) == {"rmse", "coverage", "closed_form_crps"}
     assert math.isfinite(metrics["rmse"])
@@ -110,8 +110,8 @@ def test_training_functions_report_only_to_the_event_sinks_they_are_given(
     assert any(e.split == "validation" for e in mean_sink.events)
 
 
-class _ConstantGaussianModel(nnx.Module):
-    """A Gaussian-output model predicting the same distribution for every window."""
+class _ConstantPosteriorModel(nnx.Module):
+    """A one-draw posterior predictive, the same Gaussian for every window."""
 
     def __init__(self, loc: float, scale: float) -> None:
         """Fix the predicted distribution.
@@ -124,34 +124,36 @@ class _ConstantGaussianModel(nnx.Module):
         self.scale = scale
 
     def __call__(self, inputs: Any) -> Any:
-        """Predict the fixed Gaussian for every window in the batch.
+        """Predict the fixed one-draw posterior predictive for every window.
 
         Args:
             inputs: Windowed sensor readings, shape `(batch, window_length,
                 n_sensors)`.
 
         Returns:
-            A Gaussian with `loc` and `scale` each filled to shape `(batch, 1)`.
+            A `PosteriorPredictive` with one draw at `loc` and aleatoric
+            variance `scale**2`, each of shape `(1, batch, 1)`.
         """
-        from stagereg.jax import Gaussian
+        from stagereg.jax import PosteriorPredictive
 
-        shape = (inputs.shape[0], 1)
-        return Gaussian(
-            loc=jnp.full(shape, self.loc), scale=jnp.full(shape, self.scale)
+        shape = (1, inputs.shape[0], 1)
+        return PosteriorPredictive(
+            draws=jnp.full(shape, self.loc),
+            aleatoric_variance=jnp.full(shape, self.scale**2),
         )
 
 
-def test_evaluate_test_metrics_scores_any_gaussian_output_model(
+def test_evaluate_test_metrics_scores_a_posterior_predictive(
     cmapss_run: ModuleType,
 ) -> None:
-    # A standard normal scored at its own mean: RMSE 0, the target inside
+    # A one-draw posterior is a standard normal; scored at its own mean: RMSE 0, the target inside
     # every interval, and the closed-form CRPS of N(0, 1) at 0, which is
     # 2 * phi(0) - 1 / sqrt(pi) = (sqrt(2) - 1) / sqrt(pi).
     test_windows = np.zeros((4, 30, 9))
     test_rul = np.zeros(4)
 
     metrics = cmapss_run.evaluate_test_metrics(
-        _ConstantGaussianModel(loc=0.0, scale=1.0), test_windows, test_rul
+        _ConstantPosteriorModel(loc=0.0, scale=1.0), test_windows, test_rul
     )
 
     assert metrics["rmse"] == pytest.approx(0.0, abs=1e-6)
@@ -170,7 +172,7 @@ def test_evaluate_test_metrics_accepts_extra_epoch_metrics(
     test_rul = np.zeros(4)
 
     metrics = cmapss_run.evaluate_test_metrics(
-        _ConstantGaussianModel(loc=0.0, scale=1.0),
+        _ConstantPosteriorModel(loc=0.0, scale=1.0),
         test_windows,
         test_rul,
         epoch_metrics=(*cmapss_run.TEST_METRICS, NegativeLogLikelihood()),
@@ -207,24 +209,6 @@ def test_cmapss_config_gives_the_joint_model_the_same_default_budget_as_each_sta
 
     assert config.mean_epochs == config.variance_epochs == 100
     assert config.joint_epochs == 100
-
-
-def test_cycles_predictive_maps_a_gaussian_back_to_cycles(
-    cmapss_run: ModuleType,
-) -> None:
-    from stagereg.jax import Gaussian
-
-    class FixedGaussian(nnx.Module):
-        def __call__(self, inputs: Any) -> Any:
-            return Gaussian(loc=jnp.array([[-1.0], [0.5]]), scale=jnp.array([[2.0]]))
-
-    standardization = cmapss_run.TargetStandardization(mean=50.0, scale=10.0)
-
-    output = cmapss_run.CyclesPredictive(FixedGaussian(), standardization)(None)
-
-    assert isinstance(output, Gaussian)
-    np.testing.assert_allclose(output.loc, [[40.0], [55.0]])
-    np.testing.assert_allclose(output.scale, [[20.0]])
 
 
 def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
@@ -489,88 +473,6 @@ def test_prepared_data_standardizes_every_subset_with_training_statistics(
         prepared.validation_trajectories[stats.feature_columns].to_numpy(),
         expected[stats.feature_columns].to_numpy(),
     )
-
-
-@pytest.mark.parametrize("batch_size", [1, 4, 16])
-def test_build_composite_model_matches_the_source_models_predictions(
-    cmapss_run: ModuleType,
-    batch_size: int,
-) -> None:
-    window_length, n_sensors = 30, 9
-    mean_model = cmapss_run.Cnn1DMeanModel(n_sensors, rngs=nnx.Rngs(0))
-    variance_model = cmapss_run.Cnn1DGammaModel(n_sensors, rngs=nnx.Rngs(1))
-    inputs = jax.random.normal(
-        jax.random.key(2), (batch_size, window_length, n_sensors)
-    )
-
-    composite = cmapss_run.build_composite_model(mean_model, variance_model)
-    prediction = composite(inputs)
-
-    assert bool(jnp.allclose(prediction.loc, mean_model(inputs)))
-    assert bool(jnp.allclose(prediction.scale, jnp.sqrt(variance_model(inputs).mean())))
-
-
-def test_build_composite_model_clones_the_source_models(cmapss_run: ModuleType) -> None:
-    n_sensors = 9
-    mean_model = cmapss_run.Cnn1DMeanModel(n_sensors, rngs=nnx.Rngs(0))
-    variance_model = cmapss_run.Cnn1DGammaModel(n_sensors, rngs=nnx.Rngs(1))
-    original_bias = jnp.asarray(mean_model.output.bias[...])
-
-    composite = cmapss_run.build_composite_model(mean_model, variance_model)
-    composite.mean_model.output.bias[...] = original_bias + 1.0
-
-    assert composite.mean_model is not mean_model
-    assert composite.variance_model is not variance_model
-    assert bool(jnp.allclose(mean_model.output.bias[...], original_bias))
-
-
-@pytest.mark.usefixtures("offline_fd001")
-@pytest.mark.parametrize("plot_path_argv", [[], ["--plot-path", "curve.png"]])
-def test_main_plots_the_rul_curves_after_printing_metrics(
-    cmapss_run: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    tiny_cmapss_config: Any,
-    plot_recorder: Any,
-    plot_path_argv: list[str],
-) -> None:
-    if plot_path_argv:
-        plot_path_argv = [plot_path_argv[0], str(tmp_path / plot_path_argv[1])]
-    monkeypatch.setattr(sys, "argv", ["run.py", *plot_path_argv])
-    monkeypatch.setattr(cmapss_run, "CmapssConfig", lambda: tiny_cmapss_config)
-    monkeypatch.setattr(cmapss_run, "plot_validation_rul_curves", plot_recorder)
-
-    cmapss_run.main()
-
-    (call,) = plot_recorder.calls
-    assert call.feature_columns == cmapss_run._SENSOR_NAMES
-    assert call.window_length == tiny_cmapss_config.window_length
-    # The staged-only run draws its one staged model as a single row.
-    (labelled,) = call.models
-    assert labelled.label == "Staged model"
-    # It is the composite model, predicting in cycles.
-    assert isinstance(labelled.model, cmapss_run.CyclesPredictive)
-    assert isinstance(labelled.model.model, cmapss_run.CompositeGaussianModel)
-    expected_path = Path(plot_path_argv[1]) if plot_path_argv else None
-    assert call.save_path == expected_path
-    # The unit plotted is a held-out validation unit, and the metrics are
-    # already printed by the time the figure is built.
-    trajectories = call.trajectories
-    assert isinstance(trajectories, pd.DataFrame)
-    assert not trajectories.empty
-    prepared = cmapss_run.prepare_cmapss_windows(tiny_cmapss_config)
-    plotted_units = set(trajectories["unit_id"].unique())
-    assert plotted_units == set(prepared.validation_trajectories["unit_id"].unique())
-    assert plotted_units.isdisjoint(prepared.train_trajectories["unit_id"].unique())
-    # The run, not the plotting module, picks the lifetime-spanning trio,
-    # and it picks it out of the validation trajectories it hands over.
-    units = call.units
-    assert units == cmapss_run.select_lifetime_spanning_units(trajectories)
-    assert {units.shortest, units.median, units.longest} <= plotted_units
-    printed = call.printed
-    assert isinstance(printed, str)
-    assert "FD001 test RMSE" in printed
-    assert "FD001 test closed-form CRPS" in printed
 
 
 def test_proxy_variance_nll_scores_predictions_under_the_schedule_scale(
