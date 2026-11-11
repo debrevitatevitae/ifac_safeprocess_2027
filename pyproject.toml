@@ -39,3 +39,8 @@ testpaths = ["tests"]
 [tool.ruff.lint.per-file-ignores]
 "scripts/cmapss/*.py" = ["E402"]
 "tests/cmapss/test_*.py" = ["E402"]
+
+[tool.docformatter]
+recursive = true
+black = true
+style = "google"
