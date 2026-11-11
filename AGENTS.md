@@ -4,7 +4,7 @@
 
 ## The why
 
-Reproducibility: running the repo scripts should produce the same results showed in the paper through the years.
+Conduct experiments to compare traditional joint training of MVE networks and stage based training [(Detlefsen, 2019)](http://arxiv.org/abs/1906.03260), [(Sluijterman, 2024)](https://www.sciencedirect.com/science/article/pii/S0925231224007008), [(Yi, 2025)](http://arxiv.org/abs/2505.02743), implemented by `stagereg` in a prognostics setting. This setting is the C-MAPSS dataset, for now limited to the FD001 subset [(Saxena, 2020)](https://papers.phmsociety.org/index.php/ijphm/article/view/2236).
 
 ## The what
 
