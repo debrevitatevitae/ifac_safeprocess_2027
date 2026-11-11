@@ -1,6 +1,6 @@
 """Compare the joint and staged MC-Dropout models on CMAPSS FD001 over several seeds.
 
-Prepares the FD001 data once, exactly as `ifac_safeprocess_2027.cmapss.pipeline` does, then for each
+Prepares the FD001 data once with `prepare_cmapss_windows`, then for each
 seed trains three MC-Dropout models on it. Each trains once with dropout
 active, its only regularizer, and predicts with dropout active, as a
 posterior predictive over fixed dropout-mask sets:
@@ -96,7 +96,7 @@ def train_joint_model(
     *,
     epochs: int,
     event_sinks: Sequence[EventSink],
-    dropout_rate: float = 0.0,
+    dropout_rate: float,
 ) -> Cnn1DGaussianModel:
     """Train a joint model with `run_supervised` on the Gaussian NLL.
 
@@ -110,8 +110,7 @@ def train_joint_model(
         epochs: Number of training epochs.
         event_sinks: Sinks notified of the training events; pass none to
             train silently.
-        dropout_rate: The network's dropout rate, active during training;
-            0, the default, trains it without dropout.
+        dropout_rate: The network's dropout rate, active during training.
 
     Returns:
         The trained `Cnn1DGaussianModel`.

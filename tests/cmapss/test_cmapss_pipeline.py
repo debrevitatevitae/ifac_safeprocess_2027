@@ -97,6 +97,7 @@ def test_training_functions_report_only_to_the_event_sinks_they_are_given(
         validation_targets,
         config,
         event_sinks=[mean_sink],
+        dropout_rate=0.0,
     )
     cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=[gamma_sink]
@@ -315,6 +316,7 @@ def _train_gamma(
         validation_targets,
         config,
         event_sinks=(),
+        dropout_rate=0.0,
     )
     return cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()

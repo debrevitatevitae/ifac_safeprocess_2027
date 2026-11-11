@@ -92,15 +92,15 @@ TEST_METRICS: tuple[EpochMetric, ...] = (
 
 @dataclass(frozen=True)
 class CmapssConfig:
-    """Configuration for the CMAPSS FD001 point-RUL example.
+    """Configuration for the CMAPSS FD001 MC-Dropout models.
 
     Attributes:
         window_length: Number of cycles per sliding window.
         validation_fraction: Fraction of training units held out for
             validation, grouped by whole unit ID.
         batch_size: Number of windows per mini-batch.
-        hidden_channels: Convolutional channel width of the mean, joint and
-            MC-Dropout models.
+        hidden_channels: Convolutional channel width of the mean and joint
+            networks.
         kernel_size: Convolution kernel width along the time axis.
         learning_rate: Adam learning rate for both stages.
         mean_epochs: Number of Stage-1 mean-model training epochs.
@@ -233,7 +233,7 @@ def build_supervised_training_setup[ModelT: nnx.Module](
     validation_targets: np.ndarray,
     config: CmapssConfig,
     *,
-    dropout_rate: float = 0.0,
+    dropout_rate: float,
 ) -> SupervisedTrainingSetup[ModelT]:
     """Initialize a 1D-CNN model and its optimizer and loaders from `config`.
 
@@ -253,8 +253,7 @@ def build_supervised_training_setup[ModelT: nnx.Module](
             `train_windows`.
         validation_targets: Held-out validation RUL targets.
         config: Example configuration controlling model size and training.
-        dropout_rate: The model's dropout rate; 0, the default, disables
-            dropout.
+        dropout_rate: The model's dropout rate; 0 disables dropout.
 
     Returns:
         The model, its optimizer, the training key, and both loaders.
@@ -331,7 +330,7 @@ def train_mean_model(
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
-    dropout_rate: float = 0.0,
+    dropout_rate: float,
     objective: PredictionLoss | None = None,
 ) -> tuple[Cnn1DMeanModel, TrainingState]:
     """Train a 1D-CNN mean model through `MeanStage` on windowed RUL data.
@@ -347,7 +346,7 @@ def train_mean_model(
         event_sinks: Sinks notified of the stage's training events; pass
             none to train silently.
         dropout_rate: The mean network's dropout rate, active during
-            training; 0, the default, trains it without dropout.
+            training.
         objective: The per-window objective the mean is trained and
             validated on; `None`, the default, is `SquaredErrorLoss`.
 
