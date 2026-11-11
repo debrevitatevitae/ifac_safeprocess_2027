@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import argparse
 import os
+import tempfile
 import time
 import urllib.request
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -97,6 +100,32 @@ def _is_valid_archive(archive_path: Path) -> bool:
         return False
 
 
+@contextmanager
+def _staging_file(destination: Path) -> Iterator[Path]:
+    """Create a private staging file next to `destination` for an atomic write.
+
+    Writers fill the staging file and `os.replace` it onto `destination`, so
+    a reader never sees a partial archive. Each call gets its own uniquely
+    named file, so concurrent writers sharing a cache never touch each
+    other's staging file. Whatever is left of it is removed on exit.
+
+    Args:
+        destination: The final path the staging file will replace.
+
+    Yields:
+        Path to an empty staging file in `destination`'s directory.
+    """
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".part", dir=destination.parent
+    )
+    os.close(descriptor)
+    staging = Path(name)
+    try:
+        yield staging
+    finally:
+        staging.unlink(missing_ok=True)
+
+
 def _download_archive(url: str, destination: Path) -> None:
     """Download the CMAPSS archive to `destination`, retrying transient failures.
 
@@ -111,24 +140,20 @@ def _download_archive(url: str, destination: Path) -> None:
         RuntimeError: All download attempts failed or produced a corrupt
             archive, and no manual override was available to fall back on.
     """
-    # Downloaded to a sibling temp file and atomically renamed into place so
-    # a concurrent reader never observes a partially written or corrupt
-    # `destination`.
-    temp_destination = destination.with_name(destination.name + ".part")
     last_error: Exception | None = None
-    for attempt in range(_DOWNLOAD_ATTEMPTS):
-        if attempt > 0:
-            time.sleep(_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1))
-        try:
-            urllib.request.urlretrieve(url, temp_destination)
-        except OSError as error:
-            last_error = error
-            continue
-        if _is_valid_archive(temp_destination):
-            os.replace(temp_destination, destination)
-            return
-        last_error = RuntimeError("downloaded archive is corrupt or incomplete.")
-    temp_destination.unlink(missing_ok=True)
+    with _staging_file(destination) as staging:
+        for attempt in range(_DOWNLOAD_ATTEMPTS):
+            if attempt > 0:
+                time.sleep(_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1))
+            try:
+                urllib.request.urlretrieve(url, staging)
+            except OSError as error:
+                last_error = error
+                continue
+            if _is_valid_archive(staging):
+                os.replace(staging, destination)
+                return
+            last_error = RuntimeError("downloaded archive is corrupt or incomplete.")
     raise RuntimeError(
         f"failed to download the CMAPSS archive from {url} after "
         f"{_DOWNLOAD_ATTEMPTS} attempts: {last_error}. If the archive has "
@@ -162,9 +187,9 @@ def _ensure_cached_archive(archive_override: Path | None = None) -> Path:
     if override is not None:
         if not _is_valid_archive(override):
             raise RuntimeError(f"archive override {override} is not a valid zip file.")
-        temp_archive = cached_archive.with_name(cached_archive.name + ".part")
-        temp_archive.write_bytes(override.read_bytes())
-        os.replace(temp_archive, cached_archive)
+        with _staging_file(cached_archive) as staging:
+            staging.write_bytes(override.read_bytes())
+            os.replace(staging, cached_archive)
         return cached_archive
 
     if not _is_valid_archive(cached_archive):

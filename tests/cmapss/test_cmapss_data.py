@@ -253,6 +253,47 @@ def test_invalid_archive_override_raises(tmp_path: Path) -> None:
         _DATA.load_fd001_data(archive_override=override_path)
 
 
+def test_concurrent_override_copy_does_not_disturb_an_in_flight_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, isolated_cache: Path
+) -> None:
+    override_path = tmp_path / "manual" / "CMAPSSData.zip"
+    override_path.parent.mkdir()
+    _write_archive(override_path, {_DATA._TRAIN_MEMBER: _cmapss_row(2, 1, 200)})
+    isolated_cache.mkdir(parents=True)
+
+    def download_interleaved_with_another_writer(url: str, destination: str) -> None:
+        _write_archive(Path(destination), {_DATA._TRAIN_MEMBER: _cmapss_row(1, 1, 100)})
+        # A second process seeds the same cache from an override mid-download.
+        _DATA._ensure_cached_archive(archive_override=override_path)
+
+    monkeypatch.setattr(
+        _DATA.urllib.request, "urlretrieve", download_interleaved_with_another_writer
+    )
+
+    _DATA._download_archive(
+        _DATA._CMAPSS_URL, isolated_cache / _DATA._CACHED_ARCHIVE_NAME
+    )
+
+    data = _DATA.load_fd001_data()
+    assert data["unit_id"].tolist() == [1]
+
+
+def test_failed_download_leaves_no_staging_files(
+    monkeypatch: pytest.MonkeyPatch, isolated_cache: Path
+) -> None:
+    monkeypatch.setattr(_DATA.time, "sleep", lambda _seconds: None)
+
+    def writes_garbage(url: str, destination: str) -> None:
+        Path(destination).write_bytes(b"not a zip file")
+
+    monkeypatch.setattr(_DATA.urllib.request, "urlretrieve", writes_garbage)
+
+    with pytest.raises(RuntimeError):
+        _DATA.load_fd001_data()
+
+    assert list(isolated_cache.iterdir()) == []
+
+
 def test_default_cache_dir_honors_xdg_cache_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
