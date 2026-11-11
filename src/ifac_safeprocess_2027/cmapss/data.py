@@ -9,11 +9,11 @@ to bypass the network entirely.
 Run this module directly to pre-fetch the archive into the cache without
 loading or plotting anything:
 
-    uv run python scripts/cmapss/data.py --fetch
+    uv run python -m ifac_safeprocess_2027.cmapss.data --fetch
 
 To just plot the sensor trajectories, run:
 
-    uv run python scripts/cmapss/data.py
+    uv run python -m ifac_safeprocess_2027.cmapss.data
 """
 
 from __future__ import annotations

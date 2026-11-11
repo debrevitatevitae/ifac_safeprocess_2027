@@ -1,22 +1,19 @@
-"""Tests for the CMAPSS end-to-end mean-stage training and evaluation."""
+"""Tests for the CMAPSS data preparation, training and evaluation pipeline."""
 
 from __future__ import annotations
 
 import dataclasses
 import math
-import sys
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-# The example module itself arrives through the `cmapss_run` fixture; these
+# The example module itself arrives through the `cmapss_pipeline` fixture; these
 # names are used directly by the test bodies, so they stay module-level.
 jax = pytest.importorskip("jax")
 jnp = pytest.importorskip("jax.numpy")
@@ -24,8 +21,8 @@ nnx = pytest.importorskip("flax.nnx")
 pytest.importorskip("optax")
 
 
-def test_train_gamma_model_and_evaluate_test_metrics_end_to_end(
-    cmapss_run: ModuleType,
+def test_staged_mcd_pipeline_and_evaluate_test_metrics_end_to_end(
+    cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
@@ -33,24 +30,27 @@ def test_train_gamma_model_and_evaluate_test_metrics_end_to_end(
     train_windows, train_targets = synthetic_windows(rng, 64)
     validation_windows, validation_targets = synthetic_windows(rng, 16)
     test_windows, test_rul = synthetic_windows(rng, 10)
-    config = tiny_cmapss_config
+    config = dataclasses.replace(tiny_cmapss_config, dropout_rate=0.2, num_draws=8)
 
-    mean_model, state = cmapss_run.train_mean_model(
+    _, state = cmapss_pipeline.train_mean_model(
         train_windows,
         train_targets,
         validation_windows,
         validation_targets,
         config,
         event_sinks=(),
+        dropout_rate=config.dropout_rate,
     )
-    variance_model = cmapss_run.train_gamma_model(
+    cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
     )
-    metrics = cmapss_run.evaluate_test_metrics(
-        cmapss_run.build_composite_model(mean_model, variance_model),
-        test_windows,
-        test_rul,
+    posterior = cmapss_pipeline.build_staged_mcd_posterior(
+        state, train_windows, train_targets, config, event_sinks=()
     )
+    model = cmapss_pipeline.refit_gamma_to_posterior_mean(
+        posterior, train_windows, train_targets, config, event_sinks=()
+    )
+    metrics = cmapss_pipeline.evaluate_test_metrics(model, test_windows, test_rul)
 
     assert set(metrics) == {"rmse", "coverage", "closed_form_crps"}
     assert math.isfinite(metrics["rmse"])
@@ -77,7 +77,7 @@ class _RecordingSink:
 
 
 def test_training_functions_report_only_to_the_event_sinks_they_are_given(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
     capsys: pytest.CaptureFixture[str],
@@ -90,15 +90,16 @@ def test_training_functions_report_only_to_the_event_sinks_they_are_given(
     )
     mean_sink, gamma_sink = _RecordingSink(), _RecordingSink()
 
-    _, state = cmapss_run.train_mean_model(
+    _, state = cmapss_pipeline.train_mean_model(
         train_windows,
         train_targets,
         validation_windows,
         validation_targets,
         config,
         event_sinks=[mean_sink],
+        dropout_rate=0.0,
     )
-    cmapss_run.train_gamma_model(
+    cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=[gamma_sink]
     )
 
@@ -110,8 +111,8 @@ def test_training_functions_report_only_to_the_event_sinks_they_are_given(
     assert any(e.split == "validation" for e in mean_sink.events)
 
 
-class _ConstantGaussianModel(nnx.Module):
-    """A Gaussian-output model predicting the same distribution for every window."""
+class _ConstantPosteriorModel(nnx.Module):
+    """A one-draw posterior predictive, the same Gaussian for every window."""
 
     def __init__(self, loc: float, scale: float) -> None:
         """Fix the predicted distribution.
@@ -124,34 +125,36 @@ class _ConstantGaussianModel(nnx.Module):
         self.scale = scale
 
     def __call__(self, inputs: Any) -> Any:
-        """Predict the fixed Gaussian for every window in the batch.
+        """Predict the fixed one-draw posterior predictive for every window.
 
         Args:
             inputs: Windowed sensor readings, shape `(batch, window_length,
                 n_sensors)`.
 
         Returns:
-            A Gaussian with `loc` and `scale` each filled to shape `(batch, 1)`.
+            A `PosteriorPredictive` with one draw at `loc` and aleatoric
+            variance `scale**2`, each of shape `(1, batch, 1)`.
         """
-        from stagereg.jax import Gaussian
+        from stagereg.jax import PosteriorPredictive
 
-        shape = (inputs.shape[0], 1)
-        return Gaussian(
-            loc=jnp.full(shape, self.loc), scale=jnp.full(shape, self.scale)
+        shape = (1, inputs.shape[0], 1)
+        return PosteriorPredictive(
+            draws=jnp.full(shape, self.loc),
+            aleatoric_variance=jnp.full(shape, self.scale**2),
         )
 
 
-def test_evaluate_test_metrics_scores_any_gaussian_output_model(
-    cmapss_run: ModuleType,
+def test_evaluate_test_metrics_scores_a_posterior_predictive(
+    cmapss_pipeline: ModuleType,
 ) -> None:
-    # A standard normal scored at its own mean: RMSE 0, the target inside
+    # A one-draw posterior is a standard normal; scored at its own mean: RMSE 0, the target inside
     # every interval, and the closed-form CRPS of N(0, 1) at 0, which is
     # 2 * phi(0) - 1 / sqrt(pi) = (sqrt(2) - 1) / sqrt(pi).
     test_windows = np.zeros((4, 30, 9))
     test_rul = np.zeros(4)
 
-    metrics = cmapss_run.evaluate_test_metrics(
-        _ConstantGaussianModel(loc=0.0, scale=1.0), test_windows, test_rul
+    metrics = cmapss_pipeline.evaluate_test_metrics(
+        _ConstantPosteriorModel(loc=0.0, scale=1.0), test_windows, test_rul
     )
 
     assert metrics["rmse"] == pytest.approx(0.0, abs=1e-6)
@@ -162,18 +165,18 @@ def test_evaluate_test_metrics_scores_any_gaussian_output_model(
 
 
 def test_evaluate_test_metrics_accepts_extra_epoch_metrics(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
 ) -> None:
     from stagereg.core import NegativeLogLikelihood
 
     test_windows = np.zeros((4, 30, 9))
     test_rul = np.zeros(4)
 
-    metrics = cmapss_run.evaluate_test_metrics(
-        _ConstantGaussianModel(loc=0.0, scale=1.0),
+    metrics = cmapss_pipeline.evaluate_test_metrics(
+        _ConstantPosteriorModel(loc=0.0, scale=1.0),
         test_windows,
         test_rul,
-        epoch_metrics=(*cmapss_run.TEST_METRICS, NegativeLogLikelihood()),
+        epoch_metrics=(*cmapss_pipeline.TEST_METRICS, NegativeLogLikelihood()),
     )
 
     assert set(metrics) == {"rmse", "coverage", "closed_form_crps", "nll"}
@@ -181,54 +184,36 @@ def test_evaluate_test_metrics_accepts_extra_epoch_metrics(
     assert metrics["nll"] == pytest.approx(0.5 * math.log(2.0 * math.pi), rel=1e-5)
 
 
-def test_cmapss_config_rejects_invalid_values(cmapss_run: ModuleType) -> None:
+def test_cmapss_config_rejects_invalid_values(cmapss_pipeline: ModuleType) -> None:
     with pytest.raises(ValueError, match="window_length and batch_size"):
-        cmapss_run.CmapssConfig(window_length=0)
+        cmapss_pipeline.CmapssConfig(window_length=0)
     with pytest.raises(ValueError, match="validation_fraction"):
-        cmapss_run.CmapssConfig(validation_fraction=1.5)
+        cmapss_pipeline.CmapssConfig(validation_fraction=1.5)
     with pytest.raises(ValueError, match="mean_epochs and variance_epochs"):
-        cmapss_run.CmapssConfig(mean_epochs=0)
+        cmapss_pipeline.CmapssConfig(mean_epochs=0)
     with pytest.raises(ValueError, match="mean_epochs and variance_epochs"):
-        cmapss_run.CmapssConfig(variance_epochs=0)
+        cmapss_pipeline.CmapssConfig(variance_epochs=0)
 
 
 @given(joint_epochs=st.integers(max_value=0))
 def test_cmapss_config_rejects_non_positive_joint_epochs(
-    cmapss_run: ModuleType, joint_epochs: int
+    cmapss_pipeline: ModuleType, joint_epochs: int
 ) -> None:
     with pytest.raises(ValueError, match="joint_epochs"):
-        cmapss_run.CmapssConfig(joint_epochs=joint_epochs)
+        cmapss_pipeline.CmapssConfig(joint_epochs=joint_epochs)
 
 
 def test_cmapss_config_gives_the_joint_model_the_same_default_budget_as_each_stage(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
 ) -> None:
-    config = cmapss_run.CmapssConfig()
+    config = cmapss_pipeline.CmapssConfig()
 
     assert config.mean_epochs == config.variance_epochs == 100
     assert config.joint_epochs == 100
 
 
-def test_cycles_predictive_maps_a_gaussian_back_to_cycles(
-    cmapss_run: ModuleType,
-) -> None:
-    from stagereg.jax import Gaussian
-
-    class FixedGaussian(nnx.Module):
-        def __call__(self, inputs: Any) -> Any:
-            return Gaussian(loc=jnp.array([[-1.0], [0.5]]), scale=jnp.array([[2.0]]))
-
-    standardization = cmapss_run.TargetStandardization(mean=50.0, scale=10.0)
-
-    output = cmapss_run.CyclesPredictive(FixedGaussian(), standardization)(None)
-
-    assert isinstance(output, Gaussian)
-    np.testing.assert_allclose(output.loc, [[40.0], [55.0]])
-    np.testing.assert_allclose(output.scale, [[20.0]])
-
-
 def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
 ) -> None:
     from stagereg.jax import PosteriorPredictive
 
@@ -242,9 +227,9 @@ def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
                 draw_mask=mask,
             )
 
-    standardization = cmapss_run.TargetStandardization(mean=50.0, scale=10.0)
+    standardization = cmapss_pipeline.TargetStandardization(mean=50.0, scale=10.0)
 
-    output = cmapss_run.CyclesPredictive(FixedPosterior(), standardization)(None)
+    output = cmapss_pipeline.CyclesPredictive(FixedPosterior(), standardization)(None)
 
     assert isinstance(output, PosteriorPredictive)
     np.testing.assert_allclose(output.draws, [[[50.0]], [[60.0]]])
@@ -252,18 +237,20 @@ def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
     np.testing.assert_array_equal(output.draw_mask, mask)
 
 
-def test_cmapss_config_accepts_the_mc_dropout_defaults(cmapss_run: ModuleType) -> None:
-    config = cmapss_run.CmapssConfig()
+def test_cmapss_config_accepts_the_mc_dropout_defaults(
+    cmapss_pipeline: ModuleType,
+) -> None:
+    config = cmapss_pipeline.CmapssConfig()
 
-    assert config.dropout_rate == 0.1
+    assert config.dropout_rate == 0.5
     assert config.num_draws == 100
 
 
 @given(dropout_rate=st.floats(min_value=0.0, max_value=0.999))
 def test_cmapss_config_accepts_a_dropout_rate_in_the_unit_interval(
-    cmapss_run: ModuleType, dropout_rate: float
+    cmapss_pipeline: ModuleType, dropout_rate: float
 ) -> None:
-    assert cmapss_run.CmapssConfig(dropout_rate=dropout_rate).dropout_rate == (
+    assert cmapss_pipeline.CmapssConfig(dropout_rate=dropout_rate).dropout_rate == (
         dropout_rate
     )
 
@@ -275,24 +262,24 @@ def test_cmapss_config_accepts_a_dropout_rate_in_the_unit_interval(
     )
 )
 def test_cmapss_config_rejects_a_dropout_rate_outside_the_unit_interval(
-    cmapss_run: ModuleType, dropout_rate: float
+    cmapss_pipeline: ModuleType, dropout_rate: float
 ) -> None:
     with pytest.raises(ValueError, match="dropout_rate"):
-        cmapss_run.CmapssConfig(dropout_rate=dropout_rate)
+        cmapss_pipeline.CmapssConfig(dropout_rate=dropout_rate)
 
 
 @given(num_draws=st.integers(max_value=0))
 def test_cmapss_config_rejects_a_non_positive_num_draws(
-    cmapss_run: ModuleType, num_draws: int
+    cmapss_pipeline: ModuleType, num_draws: int
 ) -> None:
     with pytest.raises(ValueError, match="num_draws"):
-        cmapss_run.CmapssConfig(num_draws=num_draws)
+        cmapss_pipeline.CmapssConfig(num_draws=num_draws)
 
 
 def test_cmapss_config_gives_the_gamma_model_a_narrow_weight_decayed_default(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
 ) -> None:
-    config = cmapss_run.CmapssConfig()
+    config = cmapss_pipeline.CmapssConfig()
 
     assert config.gamma_hidden_channels < config.hidden_channels
     assert config.gamma_weight_decay > 0.0
@@ -300,51 +287,52 @@ def test_cmapss_config_gives_the_gamma_model_a_narrow_weight_decayed_default(
 
 @given(channels=st.integers(max_value=0))
 def test_cmapss_config_rejects_non_positive_gamma_hidden_channels(
-    cmapss_run: ModuleType, channels: int
+    cmapss_pipeline: ModuleType, channels: int
 ) -> None:
     with pytest.raises(ValueError, match="gamma_hidden_channels"):
-        cmapss_run.CmapssConfig(gamma_hidden_channels=channels)
+        cmapss_pipeline.CmapssConfig(gamma_hidden_channels=channels)
 
 
 @given(weight_decay=st.floats(max_value=0.0, exclude_max=True, allow_nan=False))
 def test_cmapss_config_rejects_a_negative_gamma_weight_decay(
-    cmapss_run: ModuleType, weight_decay: float
+    cmapss_pipeline: ModuleType, weight_decay: float
 ) -> None:
     with pytest.raises(ValueError, match="gamma_weight_decay"):
-        cmapss_run.CmapssConfig(gamma_weight_decay=weight_decay)
+        cmapss_pipeline.CmapssConfig(gamma_weight_decay=weight_decay)
 
 
 def _train_gamma(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> Any:
     rng = np.random.default_rng(5)
     train_windows, train_targets = synthetic_windows(rng, 32)
     validation_windows, validation_targets = synthetic_windows(rng, 8)
-    _, state = cmapss_run.train_mean_model(
+    _, state = cmapss_pipeline.train_mean_model(
         train_windows,
         train_targets,
         validation_windows,
         validation_targets,
         config,
         event_sinks=(),
+        dropout_rate=0.0,
     )
-    return cmapss_run.train_gamma_model(
+    return cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
     )
 
 
 def test_train_gamma_model_is_gamma_hidden_channels_wide(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
-    from model import Cnn1DGammaModel
+    from ifac_safeprocess_2027.cmapss.model import Cnn1DGammaModel
 
     config = dataclasses.replace(tiny_cmapss_config, gamma_hidden_channels=3)
 
-    trained = _train_gamma(cmapss_run, config, synthetic_windows)
+    trained = _train_gamma(cmapss_pipeline, config, synthetic_windows)
 
     reference = Cnn1DGammaModel(
         3, hidden_channels=3, kernel_size=config.kernel_size, rngs=nnx.Rngs(0)
@@ -354,7 +342,7 @@ def test_train_gamma_model_is_gamma_hidden_channels_wide(
 
 
 def test_gamma_weight_decay_shrinks_the_gamma_models_weights(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
@@ -362,7 +350,7 @@ def test_gamma_weight_decay_shrinks_the_gamma_models_weights(
         config = dataclasses.replace(
             tiny_cmapss_config, gamma_weight_decay=weight_decay
         )
-        trained = _train_gamma(cmapss_run, config, synthetic_windows)
+        trained = _train_gamma(cmapss_pipeline, config, synthetic_windows)
         leaves = jax.tree.leaves(nnx.state(trained, nnx.Param))
         return float(sum(jnp.sum(jnp.square(leaf)) for leaf in leaves))
 
@@ -370,7 +358,7 @@ def test_gamma_weight_decay_shrinks_the_gamma_models_weights(
 
 
 def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
@@ -378,7 +366,7 @@ def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
     rng = np.random.default_rng(5)
     train_windows, train_targets = synthetic_windows(rng, 32)
     validation_windows, validation_targets = synthetic_windows(rng, 8)
-    mean_model, state = cmapss_run.train_mean_model(
+    mean_model, state = cmapss_pipeline.train_mean_model(
         train_windows,
         train_targets,
         validation_windows,
@@ -387,11 +375,11 @@ def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
         event_sinks=(),
         dropout_rate=config.dropout_rate,
     )
-    cmapss_run.train_gamma_model(
+    cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
     )
 
-    predictive = cmapss_run.build_staged_mcd_posterior(
+    predictive = cmapss_pipeline.build_staged_mcd_posterior(
         state, train_windows, train_targets, config, event_sinks=()
     )
 
@@ -406,29 +394,31 @@ def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
     assert len({float(draw.sum()) for draw in draws}) > 1
 
 
-def test_cmapss_config_has_no_predictive_sample_count(cmapss_run: ModuleType) -> None:
+def test_cmapss_config_has_no_predictive_sample_count(
+    cmapss_pipeline: ModuleType,
+) -> None:
     # The closed-form CRPS draws no predictive samples, so the run has no
     # sample count to configure.
     with pytest.raises(TypeError):
-        cmapss_run.CmapssConfig(predictive_sample_count=8)
+        cmapss_pipeline.CmapssConfig(predictive_sample_count=8)
 
 
 @pytest.fixture
-def short_window_config(cmapss_run: ModuleType) -> Any:
+def short_window_config(cmapss_pipeline: ModuleType) -> Any:
     """Configure a window short enough for the synthetic trajectories."""
-    return cmapss_run.CmapssConfig(window_length=10)
+    return cmapss_pipeline.CmapssConfig(window_length=10)
 
 
 @pytest.mark.usefixtures("offline_fd001")
 @pytest.mark.parametrize("window_length", [5, 10, 30])
 def test_prepared_data_windows_and_targets_are_aligned(
-    cmapss_run: ModuleType, window_length: int
+    cmapss_pipeline: ModuleType, window_length: int
 ) -> None:
-    config = cmapss_run.CmapssConfig(window_length=window_length)
+    config = cmapss_pipeline.CmapssConfig(window_length=window_length)
 
-    prepared = cmapss_run.prepare_cmapss_windows(config)
+    prepared = cmapss_pipeline.prepare_cmapss_windows(config)
 
-    n_sensors = len(cmapss_run._SENSOR_NAMES)
+    n_sensors = len(cmapss_pipeline._SENSOR_NAMES)
     assert prepared.train_windows.shape[1:] == (config.window_length, n_sensors)
     assert prepared.train_windows.shape[0] == prepared.train_targets.shape[0]
     assert (
@@ -439,9 +429,9 @@ def test_prepared_data_windows_and_targets_are_aligned(
 
 @pytest.mark.usefixtures("offline_fd001")
 def test_prepared_data_standardizes_the_targets_with_training_statistics(
-    cmapss_run: ModuleType, short_window_config: Any
+    cmapss_pipeline: ModuleType, short_window_config: Any
 ) -> None:
-    prepared = cmapss_run.prepare_cmapss_windows(short_window_config)
+    prepared = cmapss_pipeline.prepare_cmapss_windows(short_window_config)
 
     stats = prepared.target_standardization
     np.testing.assert_allclose(prepared.train_targets.mean(), 0.0, atol=1e-8)
@@ -452,14 +442,16 @@ def test_prepared_data_standardizes_the_targets_with_training_statistics(
     np.testing.assert_allclose(validation_cycles, np.round(validation_cycles))
     assert validation_cycles.min() == pytest.approx(0.0, abs=1e-8)
     # The test RUL stays in cycles.
-    np.testing.assert_array_equal(prepared.test_rul, cmapss_run.load_fd001_test_rul())
+    np.testing.assert_array_equal(
+        prepared.test_rul, cmapss_pipeline.load_fd001_test_rul()
+    )
 
 
 @pytest.mark.usefixtures("offline_fd001")
 def test_prepared_data_is_frozen(
-    cmapss_run: ModuleType, short_window_config: Any
+    cmapss_pipeline: ModuleType, short_window_config: Any
 ) -> None:
-    prepared = cmapss_run.prepare_cmapss_windows(short_window_config)
+    prepared = cmapss_pipeline.prepare_cmapss_windows(short_window_config)
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         prepared.train_targets = prepared.train_targets  # type: ignore[misc]
@@ -467,114 +459,32 @@ def test_prepared_data_is_frozen(
 
 @pytest.mark.usefixtures("offline_fd001")
 def test_prepared_data_standardizes_every_subset_with_training_statistics(
-    cmapss_run: ModuleType,
+    cmapss_pipeline: ModuleType,
     short_window_config: Any,
 ) -> None:
-    prepared = cmapss_run.prepare_cmapss_windows(short_window_config)
+    prepared = cmapss_pipeline.prepare_cmapss_windows(short_window_config)
 
     stats = prepared.standardization
-    assert stats.feature_columns == cmapss_run._SENSOR_NAMES
+    assert stats.feature_columns == cmapss_pipeline._SENSOR_NAMES
     # Statistics fitted on the training subset only: standardizing that
     # subset with its own statistics leaves it at zero mean and unit scale.
     standardized_train = prepared.train_trajectories[stats.feature_columns].to_numpy()
     assert np.allclose(standardized_train.mean(axis=0), 0.0, atol=1e-8)
     assert np.allclose(standardized_train.std(axis=0, ddof=0), 1.0, atol=1e-8)
     # The validation trajectories carry those same statistics, not their own.
-    raw = cmapss_run.load_fd001_data()
+    raw = cmapss_pipeline.load_fd001_data()
     raw_validation = raw[
         raw["unit_id"].isin(prepared.validation_trajectories["unit_id"].unique())
     ]
-    expected = cmapss_run.apply_standardization(raw_validation, stats)
+    expected = cmapss_pipeline.apply_standardization(raw_validation, stats)
     assert np.allclose(
         prepared.validation_trajectories[stats.feature_columns].to_numpy(),
         expected[stats.feature_columns].to_numpy(),
     )
 
 
-@pytest.mark.parametrize("batch_size", [1, 4, 16])
-def test_build_composite_model_matches_the_source_models_predictions(
-    cmapss_run: ModuleType,
-    batch_size: int,
-) -> None:
-    window_length, n_sensors = 30, 9
-    mean_model = cmapss_run.Cnn1DMeanModel(n_sensors, rngs=nnx.Rngs(0))
-    variance_model = cmapss_run.Cnn1DGammaModel(n_sensors, rngs=nnx.Rngs(1))
-    inputs = jax.random.normal(
-        jax.random.key(2), (batch_size, window_length, n_sensors)
-    )
-
-    composite = cmapss_run.build_composite_model(mean_model, variance_model)
-    prediction = composite(inputs)
-
-    assert bool(jnp.allclose(prediction.loc, mean_model(inputs)))
-    assert bool(jnp.allclose(prediction.scale, jnp.sqrt(variance_model(inputs).mean())))
-
-
-def test_build_composite_model_clones_the_source_models(cmapss_run: ModuleType) -> None:
-    n_sensors = 9
-    mean_model = cmapss_run.Cnn1DMeanModel(n_sensors, rngs=nnx.Rngs(0))
-    variance_model = cmapss_run.Cnn1DGammaModel(n_sensors, rngs=nnx.Rngs(1))
-    original_bias = jnp.asarray(mean_model.output.bias[...])
-
-    composite = cmapss_run.build_composite_model(mean_model, variance_model)
-    composite.mean_model.output.bias[...] = original_bias + 1.0
-
-    assert composite.mean_model is not mean_model
-    assert composite.variance_model is not variance_model
-    assert bool(jnp.allclose(mean_model.output.bias[...], original_bias))
-
-
-@pytest.mark.usefixtures("offline_fd001")
-@pytest.mark.parametrize("plot_path_argv", [[], ["--plot-path", "curve.png"]])
-def test_main_plots_the_rul_curves_after_printing_metrics(
-    cmapss_run: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    tiny_cmapss_config: Any,
-    plot_recorder: Any,
-    plot_path_argv: list[str],
-) -> None:
-    if plot_path_argv:
-        plot_path_argv = [plot_path_argv[0], str(tmp_path / plot_path_argv[1])]
-    monkeypatch.setattr(sys, "argv", ["run.py", *plot_path_argv])
-    monkeypatch.setattr(cmapss_run, "CmapssConfig", lambda: tiny_cmapss_config)
-    monkeypatch.setattr(cmapss_run, "plot_validation_rul_curves", plot_recorder)
-
-    cmapss_run.main()
-
-    (call,) = plot_recorder.calls
-    assert call.feature_columns == cmapss_run._SENSOR_NAMES
-    assert call.window_length == tiny_cmapss_config.window_length
-    # The staged-only run draws its one staged model as a single row.
-    (labelled,) = call.models
-    assert labelled.label == "Staged model"
-    # It is the composite model, predicting in cycles.
-    assert isinstance(labelled.model, cmapss_run.CyclesPredictive)
-    assert isinstance(labelled.model.model, cmapss_run.CompositeGaussianModel)
-    expected_path = Path(plot_path_argv[1]) if plot_path_argv else None
-    assert call.save_path == expected_path
-    # The unit plotted is a held-out validation unit, and the metrics are
-    # already printed by the time the figure is built.
-    trajectories = call.trajectories
-    assert isinstance(trajectories, pd.DataFrame)
-    assert not trajectories.empty
-    prepared = cmapss_run.prepare_cmapss_windows(tiny_cmapss_config)
-    plotted_units = set(trajectories["unit_id"].unique())
-    assert plotted_units == set(prepared.validation_trajectories["unit_id"].unique())
-    assert plotted_units.isdisjoint(prepared.train_trajectories["unit_id"].unique())
-    # The run, not the plotting module, picks the lifetime-spanning trio,
-    # and it picks it out of the validation trajectories it hands over.
-    units = call.units
-    assert units == cmapss_run.select_lifetime_spanning_units(trajectories)
-    assert {units.shortest, units.median, units.longest} <= plotted_units
-    printed = call.printed
-    assert isinstance(printed, str)
-    assert "FD001 test RMSE" in printed
-    assert "FD001 test closed-form CRPS" in printed
-
-
 def test_proxy_variance_nll_scores_predictions_under_the_schedule_scale(
-    cmapss_run: ModuleType, cmapss_preprocessing: ModuleType
+    cmapss_pipeline: ModuleType, cmapss_preprocessing: ModuleType
 ) -> None:
     from stagereg.core.types import Batch
 
@@ -590,7 +500,7 @@ def test_proxy_variance_nll_scores_predictions_under_the_schedule_scale(
     targets = jnp.array([[2.0], [-2.0]])
     prediction = jnp.array([[3.0], [-1.8]])
 
-    nll = cmapss_run.ProxyVarianceNLL(schedule).per_example(
+    nll = cmapss_pipeline.ProxyVarianceNLL(schedule).per_example(
         prediction, Batch(inputs=prediction, targets=targets)
     )
 

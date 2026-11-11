@@ -1,8 +1,9 @@
-"""Shared fixtures for the CMAPSS scripts' tests.
+"""Shared fixtures for the CMAPSS tests.
 
-The scripts live under `scripts/cmapss/`, not in the installed package, so
-their modules are loaded from their file paths, once per session behind one
-fixture per module. Session scope also keeps Hypothesis happy: a
+The library modules are imported from `ifac_safeprocess_2027.cmapss`; the
+`compare.py` script, which lives under `scripts/cmapss/` rather than in the
+installed package, is loaded from its file path. Each is provided once per
+session behind one fixture per module. Session scope also keeps Hypothesis happy: a
 function-scoped fixture in a `@given` test trips its
 `function_scoped_fixture` health check.
 
@@ -17,6 +18,7 @@ actually touch that module skip.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import sys
 from collections.abc import Callable, Sequence
@@ -28,18 +30,16 @@ from typing import Any
 import numpy as np
 import pytest
 
-_CMAPSS_DIR = Path(__file__).parents[2] / "scripts" / "cmapss"
-if str(_CMAPSS_DIR) not in sys.path:
-    sys.path.insert(0, str(_CMAPSS_DIR))
+_SCRIPTS_DIR = Path(__file__).parents[2] / "scripts" / "cmapss"
 
 
 def _load_script_module(module_name: str, file_name: str) -> ModuleType:
-    """Load one of the CMAPSS scripts' modules from its file path.
+    """Load one of the CMAPSS scripts from its file path.
 
     Args:
         module_name: Name to register the loaded module under, so that
             anything importing it a second time gets the same object.
-        file_name: The module's file name within `scripts/cmapss/`.
+        file_name: The script's file name within `scripts/cmapss/`.
 
     Returns:
         The executed module.
@@ -47,7 +47,7 @@ def _load_script_module(module_name: str, file_name: str) -> ModuleType:
     Raises:
         RuntimeError: If the module could not be loaded from its path.
     """
-    spec = importlib.util.spec_from_file_location(module_name, _CMAPSS_DIR / file_name)
+    spec = importlib.util.spec_from_file_location(module_name, _SCRIPTS_DIR / file_name)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load the script module {file_name!r}.")
     module = importlib.util.module_from_spec(spec)
@@ -58,23 +58,23 @@ def _load_script_module(module_name: str, file_name: str) -> ModuleType:
 
 @pytest.fixture(scope="session")
 def cmapss_preprocessing() -> ModuleType:
-    """The script's windowing and standardization module."""
+    """The windowing and standardization module."""
     for dependency in ("pandas", "sklearn"):
         pytest.importorskip(dependency)
-    return _load_script_module("cmapss_preprocessing", "preprocessing.py")
+    return importlib.import_module("ifac_safeprocess_2027.cmapss.preprocessing")
 
 
 @pytest.fixture(scope="session")
 def cmapss_plots() -> ModuleType:
-    """The script's RUL-curve plotting module."""
+    """The RUL-curve plotting module."""
     for dependency in ("matplotlib", "pandas", "sklearn"):
         pytest.importorskip(dependency)
-    return _load_script_module("cmapss_plots", "plots.py")
+    return importlib.import_module("ifac_safeprocess_2027.cmapss.plots")
 
 
 @pytest.fixture(scope="session")
-def cmapss_run() -> ModuleType:
-    """The script's end-to-end training and evaluation module."""
+def cmapss_pipeline() -> ModuleType:
+    """The data preparation, training and evaluation pipeline module."""
     for dependency in (
         "jax",
         "jax.numpy",
@@ -85,28 +85,22 @@ def cmapss_run() -> ModuleType:
         "sklearn",
     ):
         pytest.importorskip(dependency)
-    return _load_script_module("cmapss_run", "run.py")
+    return importlib.import_module("ifac_safeprocess_2027.cmapss.pipeline")
 
 
 @pytest.fixture(scope="session")
-def cmapss_compare(cmapss_run: ModuleType) -> ModuleType:
-    """The script's staged-vs-joint comparison module.
-
-    The comparison imports its sibling as `run`. That name is aliased to the
-    already loaded `cmapss_run`, so both share one module (and one set of
-    monkeypatchable FD001 loaders).
-    """
-    sys.modules["run"] = cmapss_run
+def cmapss_compare(cmapss_pipeline: ModuleType) -> ModuleType:
+    """The MC-Dropout model comparison script."""
     return _load_script_module("cmapss_compare", "compare.py")
 
 
 @pytest.fixture
-def offline_fd001(cmapss_run: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+def offline_fd001(cmapss_pipeline: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve synthetic FD001 splits in place of the cached NASA archive."""
     from cmapss_trajectories import build_random_trajectories
 
     rng = np.random.default_rng(7)
-    sensor_names = cmapss_run._SENSOR_NAMES
+    sensor_names = cmapss_pipeline._SENSOR_NAMES
     train_data = build_random_trajectories(
         rng, unit_ids=range(1, 11), n_cycles=60, feature_columns=sensor_names
     )
@@ -114,15 +108,15 @@ def offline_fd001(cmapss_run: ModuleType, monkeypatch: pytest.MonkeyPatch) -> No
         rng, unit_ids=range(1, 6), n_cycles=45, feature_columns=sensor_names
     )
     test_rul = rng.uniform(low=1.0, high=100.0, size=5)
-    monkeypatch.setattr(cmapss_run, "load_fd001_data", lambda: train_data)
-    monkeypatch.setattr(cmapss_run, "load_fd001_test_data", lambda: test_data)
-    monkeypatch.setattr(cmapss_run, "load_fd001_test_rul", lambda: test_rul)
+    monkeypatch.setattr(cmapss_pipeline, "load_fd001_data", lambda: train_data)
+    monkeypatch.setattr(cmapss_pipeline, "load_fd001_test_data", lambda: test_data)
+    monkeypatch.setattr(cmapss_pipeline, "load_fd001_test_rul", lambda: test_rul)
 
 
 @pytest.fixture(scope="session")
-def tiny_cmapss_config(cmapss_run: ModuleType) -> Any:
+def tiny_cmapss_config(cmapss_pipeline: ModuleType) -> Any:
     """A CMAPSS configuration small enough to train every model in a second or two."""
-    return cmapss_run.CmapssConfig(
+    return cmapss_pipeline.CmapssConfig(
         window_length=10,
         batch_size=16,
         hidden_channels=2,
@@ -172,7 +166,7 @@ def synthetic_windows() -> Callable[..., tuple[np.ndarray, np.ndarray]]:
 
 
 @pytest.fixture(scope="session")
-def synthetic_prepared_data(cmapss_run: ModuleType) -> Callable[..., Any]:
+def synthetic_prepared_data(cmapss_pipeline: ModuleType) -> Callable[..., Any]:
     """Return a factory of small synthetic `PreparedCmapssData`.
 
     It is called as `synthetic_prepared_data(*, seed=0, max_rul=100.0)`. Only the
@@ -192,7 +186,7 @@ def synthetic_prepared_data(cmapss_run: ModuleType) -> Callable[..., Any]:
             rng, 8, max_rul=max_rul
         )
         test_windows, test_rul = _synthetic_windows(rng, 6, max_rul=max_rul)
-        target_stats = cmapss_run.fit_target_standardization(train_targets)
+        target_stats = cmapss_pipeline.fit_target_standardization(train_targets)
         n_sensors = train_windows.shape[-1]
         sensors = [f"sensor_{i}" for i in range(n_sensors)]
         columns = ["unit_id", "time_cycles", *sensors]
@@ -205,7 +199,7 @@ def synthetic_prepared_data(cmapss_run: ModuleType) -> Callable[..., Any]:
             ],
             columns=columns,
         )
-        return cmapss_run.PreparedCmapssData(
+        return cmapss_pipeline.PreparedCmapssData(
             train_windows=train_windows,
             train_targets=target_stats.standardize(train_targets),
             validation_windows=validation_windows,
@@ -214,7 +208,7 @@ def synthetic_prepared_data(cmapss_run: ModuleType) -> Callable[..., Any]:
             test_rul=test_rul,
             train_trajectories=train_trajectories,
             validation_trajectories=pd.DataFrame(columns=columns),
-            standardization=cmapss_run.SensorStandardization(
+            standardization=cmapss_pipeline.SensorStandardization(
                 feature_columns=sensors,
                 mean=np.zeros(n_sensors),
                 scale=np.ones(n_sensors),

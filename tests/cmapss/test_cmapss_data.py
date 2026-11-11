@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
 import sys
 import zipfile
 from pathlib import Path
@@ -14,13 +14,7 @@ import pytest
 pd = pytest.importorskip("pandas")
 pytest.importorskip("seaborn")
 
-_DATA_PATH = Path(__file__).parents[2] / "scripts" / "cmapss" / "data.py"
-_SPEC = importlib.util.spec_from_file_location("cmapss_data", _DATA_PATH)
-if _SPEC is None or _SPEC.loader is None:
-    raise RuntimeError("could not load the CMAPSS data module.")
-_DATA = importlib.util.module_from_spec(_SPEC)
-sys.modules[_SPEC.name] = _DATA
-_SPEC.loader.exec_module(_DATA)
+_DATA = importlib.import_module("ifac_safeprocess_2027.cmapss.data")
 
 
 @pytest.fixture(autouse=True)

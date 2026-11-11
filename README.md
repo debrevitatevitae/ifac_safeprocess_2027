@@ -6,11 +6,21 @@ Install the environment with `uv sync --all-groups` and run the tests with `uv r
 
 ## NASA CMAPSS FD001
 
-The scripts in `scripts/cmapss/` focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
+The code in `src/ifac_safeprocess_2027/cmapss/` and the `scripts/cmapss/compare.py` script focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
 
 In particular, the scope is restricted to the FD001 dataset, which consists of 100 train and 100 test time trajectories. The train trajectories are run-to-failure, while the test trajectories are partial histories for which the RUL labels are provided in a separate file.
 
 ### Description of the files
+
+```text
+scripts/cmapss/compare.py          the entry point: trains, scores and plots the models
+src/ifac_safeprocess_2027/cmapss/
+├── data.py                        fetching and loading FD001
+├── preprocessing.py               splitting, standardization and windowing
+├── model.py                       the 1D-CNN networks
+├── pipeline.py                    configuration, training and test scoring
+└── plots.py                       RUL curves
+```
 
 #### `data.py`
 
@@ -33,7 +43,7 @@ override the defaults:
 Run the module with:
 
 ```shell
-uv run python scripts/cmapss/data.py
+uv run python -m ifac_safeprocess_2027.cmapss.data
 ```
 
 The `main` function displays all engine trajectories in seaborn line plots,
@@ -64,53 +74,46 @@ the figure is reproducible.
 
 #### `model.py`
 
-Contains the classes defining the two-stage predictive model: a Stage-1
-deterministic mean model (`Cnn1DMeanModel`), a Stage-2 Gamma residual model
-(`Cnn1DGammaModel`), and a `CompositeGaussianModel` combining the frozen
-Stage-1 point prediction with the Stage-2 Gamma mean into a single Gaussian
-predictive RUL distribution. It also holds the joint model the comparison
-trains against it, `Cnn1DGaussianModel`: one backbone of the same kind,
-followed by a Gaussian head predicting mean and scale together.
+Contains the networks the MC-Dropout models are built from: the staged
+model's mean network (`Cnn1DMeanModel`) and narrower Gamma variance network
+(`Cnn1DGammaModel`), and the joint model's network (`Cnn1DGaussianModel`):
+one backbone of the same kind, followed by a Gaussian head predicting mean
+and scale together. The mean and joint networks take a dropout rate.
 
 #### `plots.py`
 
 Builds the RUL curves. `plot_validation_rul_curves` takes the
 standardized validation trajectories, the feature columns, a sequence of
-`LabelledModel`s (a label and a trained model each, predicting a Gaussian
-or a posterior predictive), the three
-units to draw, and the window length, and draws an N×3 grid: one row per
-model, labelled with its name, and one column per unit. `run.py` passes
-its one staged model, so its figure is a single row, and its first panel's
-y-label now names that model ("Staged model") above "RUL (cycles)". It also
-passes the
-lifetime-spanning units of the validation subset, so the columns are its
-shortest-, median-, and longest-lifetime unit in that order; the module
-itself decides how a RUL curve looks and never which units it looks at. Spanning the lifetime range that way lets a reader
-tell whether the model's accuracy and its stated uncertainty behave
+`LabelledModel`s (a label and a trained model each, predicting a posterior
+predictive), the three units to draw, and the window length, and draws an
+N×3 grid: one row per model, labelled with its name, and one column per
+unit. `compare.py` passes the lifetime-spanning units of the validation
+subset, so the columns are its shortest-, median-, and longest-lifetime
+unit in that order; the module itself decides how a RUL curve looks and
+never which units it looks at. Spanning the lifetime range that way lets a
+reader tell whether the model's accuracy and its stated uncertainty behave
 consistently across units that fail early and units that survive several
 times as long.
 
-Each column shows one unit's true linear RUL across its whole trajectory,
-the model's predicted mean, and the 95% predictive interval
-`loc ± 1.96 * scale` taken analytically from the model's Gaussian. A
-posterior-predictive row instead draws the mixture mean, a total band
-(the mixture's central 95% interval, from its quantiles) and a narrower
-epistemic band (the 2.5% and 97.5% quantiles of the draws' means at each
-window); each curve comes from one evaluation over the unit's windows, so
-every draw is the same function along it. The
-columns have independent x limits, so the band stays readable in the
-short-lived unit instead of being squashed by the long-lived one's axis
-range, while each column shares its x-axis across rows so that every
-model's curve for a unit sits on the same time axis; y limits are
-independent per panel. Each column is titled with its unit ID, the role it
-plays, and that unit's lifetime in cycles, and one shared figure-level
-legend names the
-union of the elements drawn across rows. The predicted mean and its band start at each unit's
-first full window, since no prediction exists before `window_length`
-cycles of history have accumulated; the band is left unclipped at zero,
-so a band dipping below zero stays visible as evidence of the Gaussian
-assumption breaking down near end of life. With a save path the figure is
-written there, otherwise it is displayed.
+Each panel shows one unit's true linear RUL across its whole trajectory,
+the posterior predictive's mixture mean, a total band (the mixture's
+central 95% interval, from its quantiles) and a narrower epistemic band
+(the 2.5% and 97.5% quantiles of the draws' means at each window); see
+[Reading the total and epistemic bands](#reading-the-total-and-epistemic-bands).
+Each curve comes from one evaluation over the unit's windows, so every
+draw is the same function along it. The columns have independent x limits,
+so the bands stay readable in the short-lived unit instead of being
+squashed by the long-lived one's axis range, while each column shares its
+x-axis across rows so that every model's curve for a unit sits on the same
+time axis; y limits are independent per panel. Each column is titled with
+its unit ID, the role it plays, and that unit's lifetime in cycles, and one
+shared figure-level legend names the elements drawn. The predicted mean and
+its bands start at each unit's first full window, since no prediction
+exists before `window_length` cycles of history have accumulated; the
+bands are left unclipped at zero, so a band dipping below zero stays
+visible as evidence of the Gaussian assumption breaking down near end of
+life. With a save path the figure is written there, otherwise it is
+displayed.
 
 The plotted units are drawn from the **held-out validation subset**, never
 from the units the model trained on: those units are never fitted, so the
@@ -120,79 +123,65 @@ truncated rather than run to failure — a unit's lifetime, and hence its
 true RUL at every cycle, is only observable for the run-to-failure train
 split the validation subset is carved out of.
 
-#### `run.py`
+#### `pipeline.py`
 
-Contains the script to train and evaluate the two-stage predictive model on
-the CMAPSS dataset end to end: loading the FD001 train/test splits,
-standardizing and windowing them, training the Stage-1 mean model, training
-the Stage-2 Gamma model on the frozen Stage-1 model's squared residuals, and
-scoring the composite Gaussian model against the official FD001 test split
-(`RUL_FD001.txt`), one window per test unit ending at its last observed
-cycle. `prepare_cmapss_windows` returns a frozen `PreparedCmapssData`
-carrying the windowed arrays together with the standardized trajectories
-they were built from and the standardization statistics fitted on the
-training subset, so a downstream consumer can re-window a unit under
-exactly the feature scaling the models were trained with. The training and
-validation RUL targets are standardized too, with the training targets'
-mean and standard deviation (`target_standardization`); the test RUL stays
-in cycles. Every model trains on the standardized targets and is scored and
-plotted through `CyclesPredictive`, which maps its Gaussian or posterior
-predictive back to cycles.
-`build_composite_model` is the one factory for the composite predictive
-model: it clones both trained stage models and returns the composite in
-eval mode, so every consumer scores the same model in the same mode.
-`evaluate_test_metrics` scores any model whose output is a Gaussian, the
-staged model included. The mean and Gamma training functions take their
-event sinks as a parameter, so each entry point decides how verbose
-training is. The Gamma network is narrower than the mean network
+The pipeline `compare.py` builds on; it has no entry point of its own.
+`CmapssConfig` holds every setting. `prepare_cmapss_windows` loads the
+FD001 train/test splits, standardizes and windows them, and returns a
+frozen `PreparedCmapssData` carrying the windowed arrays together with the
+standardized trajectories they were built from and the standardization
+statistics fitted on the training subset, so a downstream consumer can
+re-window a unit under exactly the feature scaling the models were trained
+with. The training and validation RUL targets are standardized too, with
+the training targets' mean and standard deviation
+(`target_standardization`); the test RUL stays in cycles. Every model
+trains on the standardized targets and is scored and plotted through
+`CyclesPredictive`, which maps its posterior predictive back to cycles.
+
+The staged training functions are `train_mean_model`, which takes an
+optional `dropout_rate` and per-window `objective`, and `train_gamma_model`,
+which trains the Gamma network on the mean network's squared residuals.
+Both take their event sinks as a parameter, so each caller decides how
+verbose training is. The Gamma network is narrower than the mean network
 (`gamma_hidden_channels`, default 4 against `hidden_channels` 16) and trains
-with AdamW weight decay (`gamma_weight_decay`, default 0.1): its targets are
-the mean's in-sample squared residuals, which understate the held-out error,
-and a full-width, unregularized Gamma network overfits them into a spiky,
-overconfident variance (see [the variance network](#the-variance-network)).
-`train_mean_model` takes an optional `dropout_rate` for the staged
-MC-Dropout model's mean stage. Next to them sit the MC-Dropout helpers
-`compare.py` uses: the predictive wrapper `McDropoutPredictive` (built by
-`build_mc_dropout_predictive`), the inference-only posterior-stage runner
-`build_staged_mcd_posterior`, which returns a `PosteriorStagePredictive`, and
-`refit_gamma_to_posterior_mean`, which re-fits the Gamma network to that
-predictive's mean. The script itself does not use them.
+with AdamW weight decay (`gamma_weight_decay`, default 0.1); see
+[the variance network](#the-variance-network). Next to them sit the
+MC-Dropout helpers: the joint predictive wrapper `McDropoutPredictive`
+(built by `build_mc_dropout_predictive`), the inference-only posterior-stage
+runner `build_staged_mcd_posterior`, which returns a
+`PosteriorStagePredictive`, `refit_gamma_to_posterior_mean`, which re-fits
+the Gamma network to that predictive's mean, and the proxy-variance
+objective `ProxyVarianceNLL`.
 
-Run it with:
-
-```shell
-uv run python scripts/cmapss/run.py
-```
-
-The script prints per-epoch training metrics for both stages, followed by
-the final test-set metrics: RMSE, 95% predictive-interval coverage, and
-closed-form CRPS. The closed-form CRPS comes from each predictive
-Gaussian's own formula, so it carries no sampling noise. It then plots the RUL curves of the shortest-, median-, and
-longest-lifetime held-out validation units. Pass `--plot-path` to save
-that figure instead of displaying it:
-
-```shell
-uv run python scripts/cmapss/run.py --plot-path rul_curves.png
-```
+`evaluate_test_metrics` scores a posterior-predictive model against the
+official FD001 test split (`RUL_FD001.txt`), one window per test unit
+ending at its last observed cycle, on its exact mixture: RMSE, 95%
+coverage from the mixture's quantiles, and the mixture's closed-form CRPS,
+which carries no sampling noise.
 
 #### `compare.py`
 
-Compares the **staged model** of `run.py` with a **joint model** on the same
-prepared FD001 data. The joint model (`Cnn1DGaussianModel` in `model.py`) is
-one 1D-CNN backbone, with the same architecture and hyperparameters as each
-staged model's backbone, followed by `stagereg`'s `GaussianHead`. It is
-trained with `run_supervised` on the Gaussian negative log-likelihood for
-`joint_epochs` epochs (default 100, the same budget as each stage), and
-validated on the held-out validation windows after every epoch. Both models
-train on the standardized linear-RUL targets and predict in cycles through
-`CyclesPredictive`.
+Compares three **MC-Dropout models** on the same prepared FD001 data: a
+single training (joint) against separate trainings (staged), and the
+staged model with a proxy-variance mean stage. Each is trained once with
+dropout active and predicts with dropout active, as a posterior predictive
+over `num_draws` dropout-mask sets. The three models per seed, in column
+order:
 
-The data is prepared once, with the configured seed, so the train/validation
-split is the same for every seed; seed index `i` initializes both models
-from `seed + i`. `compare_models` returns one `SeedComparison` per seed,
-holding both trained models and their test metrics: RMSE, 95% interval
-coverage, closed-form CRPS and NLL. NLL is included because it is the joint
-model's own training objective.
+| Column | Model | How it is trained | Predictive distribution |
+| --- | --- | --- | --- |
+| `joint+mcd` | joint MC-Dropout | one Gaussian-head CNN with dropout, on the Gaussian NLL | posterior predictive, each draw with its own aleatoric variance |
+| `staged+mcd` | staged MC-Dropout | a mean stage with dropout, a Gamma stage on its residuals, an inference-only posterior stage (`MCDropout`), then the Gamma network re-fitted to the posterior predictive's mean | posterior predictive, all draws sharing the re-fitted aleatoric variance |
+| `staged+mcd+proxy` | staged MC-Dropout proxy-variance | as `staged+mcd`, with the mean stage trained on `ProxyVarianceNLL` | as `staged+mcd` |
+
+The data is prepared once, with the configured seed, so the
+train/validation split is the same for every seed; seed index `i`
+initializes every model, and its dropout masks, from `seed + i`.
+`compare_models` returns one `SeedComparison` per seed, holding the trained
+models and their test metrics: RMSE, 95% interval coverage, closed-form
+CRPS and NLL, each on the exact mixture (mixture log-density, coverage from
+mixture quantiles, the mixture's closed-form CRPS), through
+`PosteriorPredictivePredictor`.
 
 Run it with:
 
@@ -201,87 +190,50 @@ uv run python scripts/cmapss/compare.py
 ```
 
 Training is silent. The script prints one line per (seed, model) run as it
-finishes, then a table with one row per metric and a `staged` and a `joint`
-column, each cell the `mean ± std` over seeds. The `±` is the sample
-standard deviation over seeds (`ddof=1`), and 0 for a single seed. Pass
-`--seeds` to trade
-runtime for confidence (default 5):
+finishes, then a table with one row per metric and one column per model,
+each cell the `mean ± std` over seeds. The `±` is the sample standard
+deviation over seeds (`ddof=1`), and 0 for a single seed. Pass `--seeds` to
+trade runtime for confidence (default 5):
 
 ```shell
 uv run python scripts/cmapss/compare.py --seeds 10
 ```
 
-Finally it plots the first seed's RUL curves for the same shortest-,
-median-, and longest-lifetime held-out validation units as `run.py`: the
-staged model's row above the joint model's, with a shared time axis in each
-column. Using the first seed keeps the figure reproducible. With
-`--posterior-stage` the figure draws only the two MC-Dropout models (see
-below). Pass
-`--plot-path` to save that figure instead of displaying it:
+Finally it plots the first seed's RUL curves for the shortest-, median-,
+and longest-lifetime held-out validation units: one row per model, in
+column order, with a shared time axis in each column. Using the first seed
+keeps the figure reproducible. Pass `--plot-path` to save that figure
+instead of displaying it:
 
 ```shell
 uv run python scripts/cmapss/compare.py --plot-path comparison.png
 ```
 
-Note that the joint model has one backbone where the staged model has two
+Note that the joint network has one backbone where the staged model has two
 (one per stage), so it has roughly half the staged model's parameters. The
 comparison holds the architecture and the per-model epoch budget fixed, not
 the parameter count.
 
-##### `--posterior-stage`: MC-Dropout posteriors
+##### How the MC-Dropout models are trained
 
-Pass `--posterior-stage` to add the **joint MC-Dropout model** (`joint+mcd`)
-and the **staged MC-Dropout model** (`staged+mcd`). The comparison is then of
-a single training (joint) against separate trainings (staged), each with and
-without an MC-Dropout posterior. The four models per seed, in column order:
+Dropout is the only regularizer of the joint network and of the staged
+mean network: neither has a prior, weight decay or early stopping. The
+joint and staged paths differ only in single against separate training.
 
-| Column | Model | How it is trained | Predictive distribution |
-| --- | --- | --- | --- |
-| `joint` | joint model | as without the flag, no dropout | Gaussian |
-| `joint+mcd` | joint MC-Dropout | as `joint`, with dropout active | posterior predictive, each draw with its own aleatoric variance |
-| `staged` | staged model | as without the flag | Gaussian |
-| `staged+mcd` | staged MC-Dropout | as `staged`, with dropout active in the mean stage; an inference-only posterior stage (`MCDropout`); then the Gamma network re-fitted to the posterior predictive's mean | posterior predictive, all draws sharing the re-fitted aleatoric variance |
-
-`joint` and `staged` are the same models, with the same scores, as without
-the flag. All four are scored on RMSE, 95% coverage, closed-form CRPS and
-NLL on the FD001 test split; the two MC-Dropout models through
-`PosteriorPredictivePredictor`, on their exact mixture (mixture
-log-density, coverage from mixture quantiles, the mixture's closed-form
-CRPS).
-
-Run the comparison without the flag (two models, `staged` and `joint`) or
-with it (four models):
-
-```shell
-uv run python scripts/cmapss/compare.py --seeds 5
-uv run python scripts/cmapss/compare.py --seeds 5 --posterior-stage
-```
-
-`--seeds` and `--plot-path` work the same either way, but with the flag the
-figure has two rows only: `joint+mcd` above `staged+mcd`.
-
-###### How the MC-Dropout models are trained
-
-Each MC-Dropout model is trained once, exactly like its baseline but with
-dropout active at `dropout_rate`, and predicts with dropout active. Dropout
-is the only regularizer of the joint network and of the staged mean network:
-neither has a prior, weight decay or early stopping. The joint and staged
-paths then differ only in single against separate training.
-
-`joint+mcd` is the joint model trained with dropout: one Gaussian-head CNN,
-trained with `run_supervised` on the Gaussian NLL for `joint_epochs` epochs
-at `learning_rate`. Its prediction evaluates the network under `num_draws`
+`joint+mcd` is one Gaussian-head CNN trained with dropout, with
+`run_supervised` on the Gaussian NLL for `joint_epochs` epochs at
+`learning_rate`. Its prediction evaluates the network under `num_draws`
 dropout-mask sets, each one applied to the whole batch, and keeps each
 draw's own mean and aleatoric variance: a posterior predictive scored on its
 exact mixture. The masks come from a fixed key derived from the seed, so
 test scoring and the figure use the same draws.
 
-`staged+mcd` trains its own mean network with dropout, for `mean_epochs`
-epochs at `learning_rate`, then a Gamma network on its squared residuals, as
-`staged` does. A `PosteriorStage` with the `MCDropout` inference method then
-does inference only: its optimizer is `optax.set_to_zero()`, so the
-posterior is the trained mean network, unchanged, under random dropout
-masks. `PosteriorStage` needs at least one epoch, so it runs one, which only
+`staged+mcd` trains its mean network with dropout, for `mean_epochs`
+epochs at `learning_rate`, then a Gamma network on its squared residuals. A
+`PosteriorStage` with the `MCDropout` inference method then does inference
+only: its optimizer is `optax.set_to_zero()`, so the posterior is the
+trained mean network, unchanged, under random dropout masks.
+`PosteriorStage` needs at least one epoch, so it runs one, which only
 evaluates the training loss. The posterior predictive's mean, the average
 over the draws, is not the mean network with dropout off that the Gamma
 network was fitted to, so `refit_gamma_to_posterior_mean` trains a fresh
@@ -291,11 +243,9 @@ The prediction is the stage's posterior predictive with `num_draws` draws
 under the same fixed, seed-derived key, every draw sharing the re-fitted
 aleatoric variance.
 
-###### Reading the total and epistemic bands
+##### Reading the total and epistemic bands
 
-Without the flag the figure's Gaussian rows (`joint`, `staged`) draw a
-single `loc ± 1.96 * scale` band. With it, each MC-Dropout row draws the
-mixture mean and two bands around it:
+Each row of the figure draws the mixture mean and two bands around it:
 
 - the **total band**, the posterior predictive's central 95% interval
   (from the mixture's quantiles): where the next observed RUL should fall,
@@ -309,73 +259,36 @@ the gap between the two bands is not the aleatoric part: quantile widths
 do not add. The variances do: the predictive variance is the mean of the
 draws' aleatoric variances plus the variance of the draws' means. An
 epistemic band that is narrow next to the total band still says that most
-of the uncertainty is noise in the data rather than lack of knowledge. Each curve comes from one
-evaluation over the unit's windows, so every draw is the same function
-along the whole curve.
+of the uncertainty is noise in the data rather than lack of knowledge.
 
-###### Defaults
+##### Defaults
 
-The MC-Dropout settings live in `CmapssConfig` (`run.py`):
+The MC-Dropout settings live in `CmapssConfig` (`pipeline.py`):
 
 | Field | Default | Source |
 | --- | --- | --- |
-| `dropout_rate` | 0.1 | fixed by the spec (GroupiSP/stagereg#173) |
-| `num_draws` | 100 | fixed by the spec |
+| `dropout_rate` | 0.5 | chosen |
+| `num_draws` | 100 | fixed by the spec (GroupiSP/stagereg#173) |
 | `gamma_hidden_channels` | 4 | chosen, [below](#the-variance-network) |
 | `gamma_weight_decay` | 0.1 | chosen, [below](#the-variance-network) |
-| `proxy_variance_floor_cycles` | 5.0 | chosen, see [`--proxy-variance`](#--proxy-variance-a-proxy-variance-mean-stage) |
-
-Every other setting, epochs and learning rate included, is the baseline's.
-The current defaults give, with `--seeds 5 --posterior-stage --proxy-variance`:
-
-```text
-FD001 test metrics over 5 seeds (mean ± std):
-                             joint         joint+mcd            staged        staged+mcd  staged+mcd+proxy
-RMSE              30.9961 ± 1.9310  27.9156 ± 3.3373  35.1783 ± 1.4871  30.7421 ± 2.1824  26.1984 ± 1.4167
-95% coverage       0.5340 ± 0.0695   0.8280 ± 0.0327   0.4660 ± 0.0493   0.7340 ± 0.0182   0.7920 ± 0.0526
-closed-form CRPS  18.8358 ± 1.8020  15.1768 ± 1.5091  22.4508 ± 0.7821  17.4228 ± 1.5317  14.6956 ± 0.6630
-NLL                9.8387 ± 1.0811   4.8459 ± 0.1354   8.9416 ± 1.0310   5.3339 ± 0.1887   5.1286 ± 0.2107
-```
-
-Dropout improves both baselines on every metric: `joint+mcd` over `joint`
-and `staged+mcd` over `staged`. `staged+mcd+proxy` has the best RMSE and
-CRPS, and beats `staged+mcd` on every metric. `joint+mcd` keeps the best
-NLL and coverage. In the figure, the proxy model's epistemic band narrows
-over the last few dozen cycles of each unit's life and stays wide early in
-life. The `staged+mcd` band stays wide up to failure.
-
-Every model under-covers the test split, whose one window per unit sits
-late in life. The Gaussian baselines under-cover worst, at about half the
-nominal 95%, which drives their NLL to around 9–10. The variance is fitted
-on in-sample training residuals; see below.
+| `proxy_variance_floor_cycles` | 5.0 | chosen, see [the proxy-variance mean stage](#the-proxy-variance-mean-stage) |
 
 ##### The variance network
 
 The test split holds only each unit's last window, so it says little about
 early-life uncertainty. The held-out validation units span whole lifetimes,
-and on them a Gamma network as wide as the mean network (16 channels,
-plain Adam) was overconfident: its 95% coverage was 0.96 on the training
-windows it was fitted on but 0.82 on the validation windows, whose mean
-squared residual is 1.31 times the training one. In-sample residuals
-understate the held-out error, and a flexible Gamma network fits them
-closely, giving a spiky, overconfident variance.
+and on them a Gamma network as wide as the mean network, trained with plain
+Adam, is overconfident: in-sample residuals understate the held-out error,
+and a flexible Gamma network fits them closely, giving a spiky,
+overconfident variance.
 
-Shrinking it fixes most of that: the defaults narrow the Gamma network to 4
-channels, train it with AdamW, and re-fit it to the posterior predictive's
-mean for `staged+mcd`.
+The defaults therefore narrow the Gamma network to 4 channels and train it
+with AdamW weight decay 0.1, which shrinks it toward a constant variance;
+`staged+mcd` and `staged+mcd+proxy` then re-fit it to the posterior
+predictive's mean. A much larger decay flattens the band to almost a
+constant.
 
-With weight decay alone, at 16 channels, the validation NLL of the `staged`
-Gamma variance went from 5.62 (no decay) to 5.57, 5.35 and 5.04 at decays
-0.01, 0.1 and 1, and its log-variance roughness along a unit's lifetime
-from 0.17 to 0.02; at decay 1 the band is almost constant and the test
-coverage 0.99. The defaults narrow the network and keep the decay at 0.1.
-
-What no variance network fixes is the mean's bias on long lifetimes: past a
-true RUL of 200 the mean levels off around 150, and the validation coverage
-there is low. That error is absent from the training residuals the variance
-is fitted to.
-
-##### `--proxy-variance`: a proxy-variance mean stage
+##### The proxy-variance mean stage
 
 `staged+mcd` trains its mean on the squared error, which carries no
 information about how uncertain the RUL is. Dropout then drops the channels
@@ -383,10 +296,8 @@ that track degradation as freely near the end of life as the healthy
 channels early in life, although the time to failure grows more certain as
 failure nears.
 
-Pass `--proxy-variance` together with `--posterior-stage` to add a fifth
-model, the **staged MC-Dropout proxy-variance model**
-(`staged+mcd+proxy`). It is `staged+mcd` with its mean stage trained and
-validated on `ProxyVarianceNLL` (`run.py`): the Gaussian NLL of the mean
+`staged+mcd+proxy` is `staged+mcd` with its mean stage trained and
+validated on `ProxyVarianceNLL` (`pipeline.py`): the Gaussian NLL of the mean
 under a fixed, fictitious scale `ProxyVarianceSchedule` (`preprocessing.py`)
 that depends on the window's true RUL `r`:
 
@@ -401,25 +312,17 @@ sigma(r) = clip(sigma_0 * r / r_ref, floor, sigma_0)
 | `floor` | `proxy_variance_floor_cycles`, 5 cycles by default |
 
 All three are computed in cycles from the training split and divided by the
-target scale. Since the scale is fixed, the NLL's gradient with respect to the mean is the
-squared error's weighted by `1 / sigma(r)**2`. End-of-life windows weigh up to
-`(sigma_0 / floor)**2`, about 85 times, more than early-life ones. Under
-dropout the expected weighted error includes the spread of the dropout
-masks, so that spread is penalized most near the end of life: the
-epistemic band should narrow there and stay wide early in life. No weight
-normalization is needed, since Adam is close to invariant to the loss
-scale.
+target scale. Since the scale is fixed, the NLL's gradient with respect to
+the mean is the squared error's weighted by `1 / sigma(r)**2`. End-of-life
+windows weigh up to `(sigma_0 / floor)**2`, about 85 times, more than
+early-life ones. Under dropout the expected weighted error includes the
+spread of the dropout masks, so that spread is penalized most near the end
+of life: the epistemic band should narrow there and stay wide early in
+life. No weight normalization is needed, since Adam is close to invariant
+to the loss scale.
 
 The schedule is an aleatoric story, a time to failure growing more certain,
 used to shape the epistemic spread of the dropout masks. The Gamma
 variance, fitted and re-fitted afterwards exactly as for `staged+mcd`,
 models the aleatoric part independently, so the two can overlap near the
 end of life. This is a deliberate choice of the experiment.
-
-```shell
-uv run python scripts/cmapss/compare.py --seeds 5 --posterior-stage --proxy-variance
-```
-
-The other four models are unchanged. The figure gains a third row,
-`staged+mcd+proxy`, below `staged+mcd`, so that their bands can be compared
-along each unit's life.

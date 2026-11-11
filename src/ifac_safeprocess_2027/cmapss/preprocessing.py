@@ -5,7 +5,7 @@ time windows. Considers left-padding and handling units with fewer rows than
 the window length.
 
 This module has no I/O dependencies and does not import from
-``scripts/cmapss/data.py``. It operates generically on any DataFrame
+``data``. It operates generically on any DataFrame
 with a ``unit_id`` column, a ``time_cycles`` column, and a set of
 sensor/feature columns supplied by the caller.
 """
