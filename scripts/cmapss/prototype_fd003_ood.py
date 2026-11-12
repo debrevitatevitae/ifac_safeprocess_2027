@@ -67,6 +67,9 @@ PLOT_UNIT = 94
 OOD_DROPPED_METRICS = ("nll",)
 """Metrics left out of the FD003 table: the NLL is dominated by a few units."""
 
+WIDTH_RATIO_ROW = ("95% width FD003/FD001", "width_ratio")
+"""The FD003-only table row: the mean 95% interval width relative to FD001's."""
+
 
 class ClippedVariancePredictive(nnx.Module, pytree=False):
     """A predictive whose aleatoric variance is clipped to `[low, high]`."""
@@ -95,6 +98,14 @@ def aleatoric_variance_range(
         variance = np.asarray(model(batch).aleatoric_variance, dtype=float)
         low, high = min(low, variance.min()), max(high, variance.max())
     return float(low), float(high)
+
+
+def mean_interval_width(model, windows: np.ndarray, level: float = 0.95) -> float:
+    """Mean width of the central `level` mixture interval over the windows."""
+    prediction = model(np.asarray(windows, dtype=np.float32))
+    tail = (1.0 - level) / 2.0
+    width = prediction.quantile(1.0 - tail) - prediction.quantile(tail)
+    return float(np.mean(np.asarray(width, dtype=float)))
 
 
 def load_fd003() -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
@@ -157,6 +168,7 @@ def main() -> None:
                 ClippedVariancePredictive(model, low, high),
             )
         for name, (label, model) in scored.items():
+            widths = {}
             for split, windows, rul in (
                 ("FD001", prepared.test_windows, prepared.test_rul),
                 ("FD003", fd003_test_windows, fd003_rul),
@@ -164,10 +176,16 @@ def main() -> None:
                 metrics = evaluate_test_metrics(
                     model, windows, rul, epoch_metrics=COMPARISON_METRICS
                 )
+                widths[split] = mean_interval_width(model, windows)
                 if split == "FD003":
                     for metric in OOD_DROPPED_METRICS:
                         metrics.pop(metric)
-                print(f"[{split} {name} seed={config.seed}] {metrics}", flush=True)
+                    metrics["width_ratio"] = widths["FD003"] / widths["FD001"]
+                print(
+                    f"[{split} {name} seed={config.seed}] {metrics} "
+                    f"mean 95% width {widths[split]:.4g} cycles",
+                    flush=True,
+                )
                 results[split].append(ModelResult(name, label, model, metrics))
         for split in per_split:
             per_split[split].append(
@@ -179,10 +197,13 @@ def main() -> None:
 
     all_rows = compare_module._TABLE_ROWS
     for split, comparisons in per_split.items():
-        compare_module._TABLE_ROWS = tuple(
-            row
-            for row in all_rows
-            if split != "FD003" or row[1] not in OOD_DROPPED_METRICS
+        compare_module._TABLE_ROWS = (
+            all_rows
+            if split == "FD001"
+            else (
+                *(row for row in all_rows if row[1] not in OOD_DROPPED_METRICS),
+                WIDTH_RATIO_ROW,
+            )
         )
         print(f"\n{split} test metrics over {args.seeds} seeds (mean ± std):")
         print(format_comparison_table(comparisons))
