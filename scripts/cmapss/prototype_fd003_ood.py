@@ -5,14 +5,16 @@ on FD001 exactly as in `compare.py`, on CMAPSS FD003 (same single operating
 condition, an extra fan-degradation fault mode)?
 
 * Scores both models on the FD003 test split (one last window per unit,
-  `RUL_FD003.txt`) next to their in-distribution FD001 test scores.
+  `RUL_FD003.txt`) and box-plots each metric over seeds, one box per model.
+  The FD001 test windows are only used for the 95% width ratio's denominator.
 * Plots the RUL curve of FD003 train unit 94 (run-to-failure), one row per
   model, for the first seed.
 
 FD003 is standardized with FD001's training statistics, as a deployed model
 would see it.
 
-    uv run python scripts/cmapss/prototype_fd003_ood.py --seeds 3 --plot-path fd003_unit94.png
+    uv run python scripts/cmapss/prototype_fd003_ood.py --seeds 3 \
+        --plot-path fd003_unit94.png --metrics-plot-path fd003_metrics.png
 """
 
 from __future__ import annotations
@@ -29,14 +31,11 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
-import compare as compare_module
 from compare import (
     COMPARISON_METRICS,
     ModelResult,
-    SeedComparison,
     _train_joint_mcd,
     _train_staged_mcd,
-    format_comparison_table,
 )
 
 from flax import nnx
@@ -65,10 +64,15 @@ from ifac_safeprocess_2027.cmapss.preprocessing import (
 PLOT_UNIT = 94
 
 OOD_DROPPED_METRICS = ("nll",)
-"""Metrics left out of the FD003 table: the NLL is dominated by a few units."""
+"""Metrics left out on FD003: the NLL is dominated by a few units."""
 
-WIDTH_RATIO_ROW = ("95% width FD003/FD001", "width_ratio")
-"""The FD003-only table row: the mean 95% interval width relative to FD001's."""
+PLOTTED_METRICS = (
+    ("RMSE (cycles)", "rmse"),
+    ("95% coverage", "coverage"),
+    ("closed-form CRPS (cycles)", "closed_form_crps"),
+    ("95% width FD003/FD001", "width_ratio"),
+)
+"""The FD003 metrics box-plotted over seeds: (axis title, metric name)."""
 
 
 class ClippedVariancePredictive(nnx.Module, pytree=False):
@@ -118,15 +122,39 @@ def load_fd003() -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
     return train, test, rul
 
 
+def plot_metric_boxes(
+    scores: dict[str, dict[str, list[float]]], seeds: int
+) -> plt.Figure:
+    """One box plot per metric of `PLOTTED_METRICS`, one box per model."""
+    figure, grid = plt.subplots(
+        1, len(PLOTTED_METRICS), figsize=(3.2 * len(PLOTTED_METRICS), 3.4)
+    )
+    names = list(scores)
+    for axes, (title, metric) in zip(grid, PLOTTED_METRICS, strict=True):
+        axes.boxplot([scores[name][metric] for name in names], tick_labels=names)
+        axes.set_title(title)
+        if metric == "coverage":
+            axes.axhline(0.95, color="grey", linestyle="--", linewidth=1)
+        if metric == "width_ratio":
+            axes.axhline(1.0, color="grey", linestyle="--", linewidth=1)
+    figure.suptitle(f"FD003 test metrics over {seeds} seeds — FD001-trained")
+    figure.tight_layout()
+    return figure
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=3)
     parser.add_argument("--plot-path", type=Path, default=None)
+    parser.add_argument("--metrics-plot-path", type=Path, default=None)
     args = parser.parse_args()
 
     fd003_train_raw, fd003_test_raw, fd003_rul = load_fd003()
     base = CmapssConfig()
-    per_split: dict[str, list[SeedComparison]] = {"FD001": [], "FD003": []}
+    scores: dict[str, dict[str, list[float]]] = {
+        "joint": {metric: [] for _, metric in PLOTTED_METRICS},
+        "staged": {metric: [] for _, metric in PLOTTED_METRICS},
+    }
     first_models = None
     first_fd003_train = None
 
@@ -145,16 +173,15 @@ def main() -> None:
             floor_cycles=config.proxy_variance_floor_cycles,
         )
         models = {
-            "joint+mcd": ("Joint MC-Dropout", _train_joint_mcd(prepared, config)),
-            "staged+mcd+proxy": (
+            "joint": ("Joint MC-Dropout", _train_joint_mcd(prepared, config)),
+            "staged": (
                 "Staged MC-Dropout proxy",
                 _train_staged_mcd(
                     prepared, config, objective=ProxyVarianceNLL(schedule)
                 ),
             ),
         }
-        results: dict[str, list[ModelResult]] = {"FD001": [], "FD003": []}
-        scored = {}
+        results: list[ModelResult] = []
         for name, (label, raw) in models.items():
             model = CyclesPredictive(raw, prepared.target_standardization)
             low, high = aleatoric_variance_range(model, prepared.train_windows)
@@ -163,50 +190,26 @@ def main() -> None:
                 f"[{low:.4g}, {high:.4g}] cycles^2",
                 flush=True,
             )
-            scored[f"{name}+clip"] = (
-                f"{label} clipped",
-                ClippedVariancePredictive(model, low, high),
+            model = ClippedVariancePredictive(model, low, high)
+            metrics = evaluate_test_metrics(
+                model, fd003_test_windows, fd003_rul, epoch_metrics=COMPARISON_METRICS
             )
-        for name, (label, model) in scored.items():
-            widths = {}
-            for split, windows, rul in (
-                ("FD001", prepared.test_windows, prepared.test_rul),
-                ("FD003", fd003_test_windows, fd003_rul),
-            ):
-                metrics = evaluate_test_metrics(
-                    model, windows, rul, epoch_metrics=COMPARISON_METRICS
-                )
-                widths[split] = mean_interval_width(model, windows)
-                if split == "FD003":
-                    for metric in OOD_DROPPED_METRICS:
-                        metrics.pop(metric)
-                    metrics["width_ratio"] = widths["FD003"] / widths["FD001"]
-                print(
-                    f"[{split} {name} seed={config.seed}] {metrics} "
-                    f"mean 95% width {widths[split]:.4g} cycles",
-                    flush=True,
-                )
-                results[split].append(ModelResult(name, label, model, metrics))
-        for split in per_split:
-            per_split[split].append(
-                SeedComparison(config.seed, prepared, tuple(results[split]))
-            )
+            for metric in OOD_DROPPED_METRICS:
+                metrics.pop(metric)
+            metrics["width_ratio"] = mean_interval_width(
+                model, fd003_test_windows
+            ) / mean_interval_width(model, prepared.test_windows)
+            print(f"[FD003 {name} seed={config.seed}] {metrics}", flush=True)
+            for _, metric in PLOTTED_METRICS:
+                scores[name][metric].append(metrics[metric])
+            results.append(ModelResult(name, f"{label} clipped", model, metrics))
         if first_models is None:
-            first_models = results["FD003"]
+            first_models = results
             first_fd003_train = apply_standardization(fd003_train_raw, stats)
 
-    all_rows = compare_module._TABLE_ROWS
-    for split, comparisons in per_split.items():
-        compare_module._TABLE_ROWS = (
-            all_rows
-            if split == "FD001"
-            else (
-                *(row for row in all_rows if row[1] not in OOD_DROPPED_METRICS),
-                WIDTH_RATIO_ROW,
-            )
-        )
-        print(f"\n{split} test metrics over {args.seeds} seeds (mean ± std):")
-        print(format_comparison_table(comparisons))
+    metrics_figure = plot_metric_boxes(scores, args.seeds)
+    if args.metrics_plot_path:
+        metrics_figure.savefig(args.metrics_plot_path, dpi=150)
 
     figure, grid = plt.subplots(
         len(first_models), 1, figsize=(9, 3.2 * len(first_models)), sharex=True
