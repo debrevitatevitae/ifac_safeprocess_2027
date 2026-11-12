@@ -251,7 +251,7 @@ def test_cmapss_config_accepts_the_mc_dropout_defaults(
     config = cmapss_pipeline.CmapssConfig()
 
     assert config.dropout_rate == 0.5
-    assert config.num_draws == 100
+    assert config.num_draws == 1000
 
 
 @given(dropout_rate=st.floats(min_value=0.0, max_value=0.999))
