@@ -1,7 +1,7 @@
 """Shared fixtures for the CMAPSS tests.
 
 The library modules are imported from `ifac_safeprocess_2027.cmapss`; the
-`compare.py` script, which lives under `scripts/cmapss/` rather than in the
+`fd001.py` script, which lives under `scripts/cmapss/` rather than in the
 installed package, is loaded from its file path. Each is provided once per
 session behind one fixture per module. Session scope also keeps Hypothesis happy: a
 function-scoped fixture in a `@given` test trips its
@@ -89,9 +89,9 @@ def cmapss_pipeline() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
-def cmapss_compare(cmapss_pipeline: ModuleType) -> ModuleType:
+def cmapss_fd001(cmapss_pipeline: ModuleType) -> ModuleType:
     """The MC-Dropout model comparison script."""
-    return _load_script_module("cmapss_compare", "compare.py")
+    return _load_script_module("cmapss_fd001", "fd001.py")
 
 
 @pytest.fixture

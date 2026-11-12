@@ -20,7 +20,7 @@ single-window-per-trajectory protocol: one window per test unit, ending at
 its last observed (possibly truncated) cycle, scored against that unit's
 ground-truth RUL from `RUL_FD001.txt`.
 
-`compare.py` is the entry point that uses it.
+`fd001.py` is the entry point that uses it.
 """
 
 from __future__ import annotations

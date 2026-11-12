@@ -18,6 +18,8 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
   validation split, in both its fits (ADR 0001). The joint MC-Dropout model
   trains on train ∪ validation, with no validation monitoring.
 - `validation_fraction` defaults to 0.3 (was 0.2).
-- `compare.py` re-draws the train/validation split per seed; `compare_models`
+- `scripts/cmapss/compare.py` is renamed `fd001.py`, and the FD003 OOD prototype
+  `prototype_fd003_ood.py` is renamed `fd003_ood.py`.
+- `fd001.py` re-draws the train/validation split per seed; `compare_models`
   takes a `prepare` callable and each `SeedComparison` keeps its prepared data.
 - The figure draws the first seed's lifetime-spanning **train-split** units.

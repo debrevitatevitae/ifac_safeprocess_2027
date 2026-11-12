@@ -40,7 +40,7 @@ trained on those units, so the figure is for visualization only.
 
 Run it with:
 
-    uv run python scripts/cmapss/compare.py --seeds 5
+    uv run python scripts/cmapss/fd001.py --seeds 5
 
 Pass `--plot-path` to save the figure instead of displaying it.
 """

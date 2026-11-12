@@ -6,14 +6,14 @@ Install the environment with `uv sync --all-groups` and run the tests with `uv r
 
 ## NASA CMAPSS FD001
 
-The code in `src/ifac_safeprocess_2027/cmapss/` and the `scripts/cmapss/compare.py` script focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
+The code in `src/ifac_safeprocess_2027/cmapss/` and the `scripts/cmapss/fd001.py` script focus on predicting the remaining useful life (RUL) of the simulated jet engine units that compose the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, available from the [NASA CMAPSS dataset page](https://data.nasa.gov/dataset/cmapss-jet-engine-simulated-data/resource/5224bcd1-ad61-490b-93b9-2817288accb8).
 
 In particular, the scope is restricted to the FD001 dataset, which consists of 100 train and 100 test time trajectories. The train trajectories are run-to-failure, while the test trajectories are partial histories for which the RUL labels are provided in a separate file.
 
 ### Description of the files
 
 ```text
-scripts/cmapss/compare.py          the entry point: trains, scores and plots the models
+scripts/cmapss/fd001.py            the entry point: trains, scores and plots the models
 src/ifac_safeprocess_2027/cmapss/
 ├── data.py                        fetching and loading FD001
 ├── preprocessing.py               splitting, standardization and windowing
@@ -87,7 +87,7 @@ run-to-failure trajectories, the feature columns, a sequence of
 `LabelledModel`s (a label and a trained model each, predicting a posterior
 predictive), the three units to draw, and the window length, and draws an
 N×3 grid: one row per model, labelled with its name, and one column per
-unit. `compare.py` passes the lifetime-spanning units of the first seed's
+unit. `fd001.py` passes the lifetime-spanning units of the first seed's
 train split, so the columns are its shortest-, median-, and longest-lifetime
 unit in that order; the module itself decides how a RUL curve looks and
 never which units it looks at. Spanning the lifetime range that way lets a
@@ -127,7 +127,7 @@ observable for the run-to-failure train data.
 
 #### `pipeline.py`
 
-The pipeline `compare.py` builds on; it has no entry point of its own.
+The pipeline `fd001.py` builds on; it has no entry point of its own.
 `CmapssConfig` holds every setting. `prepare_cmapss_windows` loads the
 FD001 train/test splits, standardizes and windows them, and returns a
 frozen `PreparedCmapssData` carrying the windowed arrays together with the
@@ -143,7 +143,7 @@ trains on the standardized targets and is scored and plotted through
 The staged training functions are `train_mean_model`, which takes an
 optional `dropout_rate` and per-window `objective`, and `train_gamma_model`,
 which trains the Gamma network on the mean network's squared residuals on
-the windows it is given; `compare.py` gives it the held-out validation
+the windows it is given; `fd001.py` gives it the held-out validation
 windows.
 Both take their event sinks as a parameter, so each caller decides how
 verbose training is. The Gamma network is narrower than the mean network
@@ -163,7 +163,7 @@ ending at its last observed cycle, on its exact mixture: RMSE, 95%
 coverage from the mixture's quantiles, and the mixture's closed-form CRPS,
 which carries no sampling noise.
 
-#### `compare.py`
+#### `fd001.py`
 
 Compares three **MC-Dropout models** on the same FD001 data budget: a
 single training (joint) against separate trainings (staged), and the
@@ -191,7 +191,7 @@ mixture quantiles, the mixture's closed-form CRPS), through
 Run it with:
 
 ```shell
-uv run python scripts/cmapss/compare.py
+uv run python scripts/cmapss/fd001.py
 ```
 
 Training is silent. The script prints one line per (seed, model) run as it
@@ -201,7 +201,7 @@ deviation over seeds (`ddof=1`), and 0 for a single seed. Pass `--seeds` to
 trade runtime for confidence (default 5):
 
 ```shell
-uv run python scripts/cmapss/compare.py --seeds 10
+uv run python scripts/cmapss/fd001.py --seeds 10
 ```
 
 Finally it plots the first seed's RUL curves for the shortest-, median-,
@@ -212,7 +212,7 @@ keeps the figure reproducible. Pass `--plot-path` to save that figure
 instead of displaying it:
 
 ```shell
-uv run python scripts/cmapss/compare.py --plot-path comparison.png
+uv run python scripts/cmapss/fd001.py --plot-path comparison.png
 ```
 
 Note that the joint network has one backbone where the staged model has two

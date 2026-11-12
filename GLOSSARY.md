@@ -47,5 +47,5 @@ The 2.5% and 97.5% quantiles, at each window, of a posterior predictive's draws'
 _Avoid_: Model uncertainty interval, credible interval
 
 **Held-out residuals**:
-A mean model's squared residuals on windows it never trained on: in `compare.py`, the validation split's. The staged models' Gamma variance stage fits these rather than the in-sample residuals on the train split, which understate the held-out error and so give too small a variance.
+A mean model's squared residuals on windows it never trained on: in `fd001.py`, the validation split's. The staged models' Gamma variance stage fits these rather than the in-sample residuals on the train split, which understate the held-out error and so give too small a variance.
 _Avoid_: Validation residuals (ambiguous with monitoring), out-of-fold residuals (no folds here), OOF

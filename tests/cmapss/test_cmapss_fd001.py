@@ -44,7 +44,7 @@ def _always(prepared: Any) -> Callable[[Any], Any]:
 
 
 def test_compare_models_prepares_the_data_once_per_seed_from_that_seed(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
@@ -56,7 +56,7 @@ def test_compare_models_prepares_the_data_once_per_seed_from_that_seed(
         prepared_seeds.append(config.seed)
         return synthetic_prepared_data(seed=config.seed)
 
-    results = cmapss_compare.compare_models(mcd_config, seeds=2, prepare=prepare)
+    results = cmapss_fd001.compare_models(mcd_config, seeds=2, prepare=prepare)
 
     # Each seed re-draws the train/validation split, and keeps the data it
     # was trained and scored on.
@@ -69,7 +69,7 @@ def test_compare_models_prepares_the_data_once_per_seed_from_that_seed(
 
 
 def test_compare_models_scores_the_three_mcd_models_once_per_seed(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
@@ -77,7 +77,7 @@ def test_compare_models_scores_the_three_mcd_models_once_per_seed(
 
     prepared = synthetic_prepared_data()
 
-    results = cmapss_compare.compare_models(
+    results = cmapss_fd001.compare_models(
         mcd_config, seeds=2, prepare=_always(prepared)
     )
 
@@ -103,7 +103,7 @@ def test_compare_models_scores_the_three_mcd_models_once_per_seed(
 
 
 def test_compare_models_trains_silently_and_reproduces_a_seed(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
     capsys: pytest.CaptureFixture[str],
@@ -112,13 +112,13 @@ def test_compare_models_trains_silently_and_reproduces_a_seed(
 
     prepared = synthetic_prepared_data()
 
-    (first,) = cmapss_compare.compare_models(
+    (first,) = cmapss_fd001.compare_models(
         mcd_config, seeds=1, prepare=_always(prepared)
     )
-    (second,) = cmapss_compare.compare_models(
+    (second,) = cmapss_fd001.compare_models(
         mcd_config, seeds=1, prepare=_always(prepared)
     )
-    _, other_seed = cmapss_compare.compare_models(
+    _, other_seed = cmapss_fd001.compare_models(
         mcd_config, seeds=2, prepare=_always(prepared)
     )
 
@@ -140,7 +140,7 @@ def test_compare_models_trains_silently_and_reproduces_a_seed(
     max_rul=st.floats(min_value=2.0, max_value=400.0),
 )
 def test_compare_models_scores_lie_in_their_ranges(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
     data_seed: int,
@@ -148,7 +148,7 @@ def test_compare_models_scores_lie_in_their_ranges(
 ) -> None:
     prepared = synthetic_prepared_data(seed=data_seed, max_rul=max_rul)
 
-    (result,) = cmapss_compare.compare_models(
+    (result,) = cmapss_fd001.compare_models(
         mcd_config, seeds=1, prepare=_always(prepared)
     )
 
@@ -160,7 +160,7 @@ def test_compare_models_scores_lie_in_their_ranges(
 
 
 def test_the_joint_model_trains_for_joint_epochs(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -171,15 +171,15 @@ def test_the_joint_model_trains_for_joint_epochs(
         mcd_config, mean_epochs=2, variance_epochs=3, joint_epochs=4
     )
     trained_epochs: list[int] = []
-    run_supervised = cmapss_compare.run_supervised
+    run_supervised = cmapss_fd001.run_supervised
 
     def record_run_supervised(**kwargs: Any) -> Any:
         trained_epochs.append(kwargs["epochs"])
         return run_supervised(**kwargs)
 
-    monkeypatch.setattr(cmapss_compare, "run_supervised", record_run_supervised)
+    monkeypatch.setattr(cmapss_fd001, "run_supervised", record_run_supervised)
 
-    cmapss_compare.compare_models(
+    cmapss_fd001.compare_models(
         config, seeds=1, prepare=_always(synthetic_prepared_data())
     )
 
@@ -189,7 +189,7 @@ def test_the_joint_model_trains_for_joint_epochs(
 
 
 def test_compare_models_predict_in_cycles(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
@@ -199,7 +199,7 @@ def test_compare_models_predict_in_cycles(
     # model left predicting in standardized units would put its means near 0.
     prepared = synthetic_prepared_data(max_rul=1000.0)
 
-    (result,) = cmapss_compare.compare_models(
+    (result,) = cmapss_fd001.compare_models(
         mcd_config, seeds=1, prepare=_always(prepared)
     )
 
@@ -209,7 +209,7 @@ def test_compare_models_predict_in_cycles(
 
 
 def test_mcd_models_without_dropout_collapse_to_a_single_draw(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
@@ -222,9 +222,7 @@ def test_mcd_models_without_dropout_collapse_to_a_single_draw(
     config = dataclasses.replace(mcd_config, dropout_rate=0.0)
     prepared = synthetic_prepared_data()
 
-    (result,) = cmapss_compare.compare_models(
-        config, seeds=1, prepare=_always(prepared)
-    )
+    (result,) = cmapss_fd001.compare_models(config, seeds=1, prepare=_always(prepared))
 
     for model in result.models:
         predictive = model.model(prepared.test_windows)
@@ -237,13 +235,13 @@ def test_mcd_models_without_dropout_collapse_to_a_single_draw(
 
 
 def test_the_proxy_variance_changes_only_the_staged_mean_objective(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
     prepared = synthetic_prepared_data()
 
-    (result,) = cmapss_compare.compare_models(
+    (result,) = cmapss_fd001.compare_models(
         mcd_config, seeds=1, prepare=_always(prepared)
     )
 
@@ -272,7 +270,7 @@ def _fixed_posterior_model(low: float, high: float, scales: tuple[float, float])
 
 
 def test_score_on_test_split_scores_a_posterior_predictive_on_its_exact_mixture(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
     import dataclasses
@@ -287,7 +285,7 @@ def test_score_on_test_split_scores_a_posterior_predictive_on_its_exact_mixture(
     )
     model = _fixed_posterior_model(low=0.0, high=10.0, scales=(1.0, 2.0))
 
-    metrics = cmapss_compare.score_on_test_split(model, prepared)
+    metrics = cmapss_fd001.score_on_test_split(model, prepared)
 
     assert set(metrics) == _METRIC_NAMES
 
@@ -316,7 +314,7 @@ def test_score_on_test_split_scores_a_posterior_predictive_on_its_exact_mixture(
     scale=st.floats(min_value=0.5, max_value=20.0),
 )
 def test_score_on_test_split_scores_a_one_point_posterior_as_its_gaussian(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     synthetic_prepared_data: Callable[..., Any],
     loc: float,
     scale: float,
@@ -327,7 +325,7 @@ def test_score_on_test_split_scores_a_one_point_posterior_as_its_gaussian(
     prepared = synthetic_prepared_data()
     model = _fixed_posterior_model(low=loc, high=loc, scales=(scale, scale))
 
-    metrics = cmapss_compare.score_on_test_split(model, prepared)
+    metrics = cmapss_fd001.score_on_test_split(model, prepared)
 
     rul = np.asarray(prepared.test_rul, dtype=float)
     z = (rul - loc) / scale
@@ -351,22 +349,22 @@ _CELL = r"-?\d+\.\d+ ± \d+\.\d+"
 
 
 def test_format_comparison_table_gives_each_model_a_mean_and_sample_std_column(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
 ) -> None:
     def seed(staged_rmse: float, joint_rmse: float) -> Any:
         def model(name: str, rmse: float) -> Any:
             metrics = {"rmse": rmse, "coverage": 1.0, "closed_form_crps": 0.0}
-            return cmapss_compare.ModelResult(
+            return cmapss_fd001.ModelResult(
                 name=name, label=name, model=None, metrics={**metrics, "nll": 0.0}
             )
 
-        return cmapss_compare.SeedComparison(
+        return cmapss_fd001.SeedComparison(
             seed=0,
             prepared=None,
             models=(model("staged+mcd", staged_rmse), model("joint+mcd", joint_rmse)),
         )
 
-    table = cmapss_compare.format_comparison_table([seed(1.0, 10.0), seed(3.0, 10.0)])
+    table = cmapss_fd001.format_comparison_table([seed(1.0, 10.0), seed(3.0, 10.0)])
 
     header, rmse, *_ = table.splitlines()
     assert header.split() == ["staged+mcd", "joint+mcd"]
@@ -375,23 +373,23 @@ def test_format_comparison_table_gives_each_model_a_mean_and_sample_std_column(
 
 
 def test_format_comparison_table_gives_one_column_per_model_result_in_order(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
 ) -> None:
     names = ("joint+mcd", "staged+mcd", "staged+mcd+proxy")
 
     def model(name: str, nll: float) -> Any:
         metrics = {"rmse": 0.0, "coverage": 1.0, "closed_form_crps": 0.0, "nll": nll}
-        return cmapss_compare.ModelResult(
+        return cmapss_fd001.ModelResult(
             name=name, label=name, model=None, metrics=metrics
         )
 
-    seed = cmapss_compare.SeedComparison(
+    seed = cmapss_fd001.SeedComparison(
         seed=0,
         prepared=None,
         models=tuple(model(name, float(index)) for index, name in enumerate(names)),
     )
 
-    table = cmapss_compare.format_comparison_table([seed])
+    table = cmapss_fd001.format_comparison_table([seed])
 
     header, *rows = table.splitlines()
     assert tuple(header.split()) == names
@@ -406,7 +404,7 @@ def test_format_comparison_table_gives_one_column_per_model_result_in_order(
 )
 def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
     cmapss_pipeline: ModuleType,
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -417,28 +415,28 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
 ) -> None:
     plot_path = tmp_path / plot_name if plot_name else None
     plot_argv = ["--plot-path", str(plot_path)] if plot_path else []
-    monkeypatch.setattr(sys, "argv", ["compare.py", *seeds_argv, *plot_argv])
-    monkeypatch.setattr(cmapss_compare, "CmapssConfig", lambda: mcd_config)
+    monkeypatch.setattr(sys, "argv", ["fd001.py", *seeds_argv, *plot_argv])
+    monkeypatch.setattr(cmapss_fd001, "CmapssConfig", lambda: mcd_config)
     prepared_with: list[Any] = []
-    prepare = cmapss_compare.prepare_cmapss_windows
+    prepare = cmapss_fd001.prepare_cmapss_windows
 
     def record_prepare(config: Any) -> Any:
         prepared_with.append(config)
         return prepare(config)
 
-    monkeypatch.setattr(cmapss_compare, "prepare_cmapss_windows", record_prepare)
+    monkeypatch.setattr(cmapss_fd001, "prepare_cmapss_windows", record_prepare)
     compared: list[Any] = []
-    compare = cmapss_compare.compare_models
+    compare = cmapss_fd001.compare_models
 
     def record_compare(*args: Any, **kwargs: Any) -> Any:
         results = compare(*args, **kwargs)
         compared.extend(results)
         return results
 
-    monkeypatch.setattr(cmapss_compare, "compare_models", record_compare)
-    monkeypatch.setattr(cmapss_compare, "plot_validation_rul_curves", plot_recorder)
+    monkeypatch.setattr(cmapss_fd001, "compare_models", record_compare)
+    monkeypatch.setattr(cmapss_fd001, "plot_validation_rul_curves", plot_recorder)
 
-    cmapss_compare.main()
+    cmapss_fd001.main()
 
     # The data is prepared once per seed, from that seed.
     assert [config.seed for config in prepared_with] == list(
@@ -456,7 +454,7 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
     # for every model, as the joint model trains on train and validation.
     first_train = compared[0].prepared.train_trajectories
     assert plot.trajectories is first_train
-    assert plot.units == cmapss_compare.select_lifetime_spanning_units(first_train)
+    assert plot.units == cmapss_fd001.select_lifetime_spanning_units(first_train)
     # Every run line and the table are printed before the figure is drawn.
     lines = plot.printed.splitlines()
     expected_seeds = [
@@ -481,7 +479,7 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
 
 
 def test_the_staged_gamma_fits_train_on_the_held_out_residuals(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -491,19 +489,19 @@ def test_the_staged_gamma_fits_train_on_the_held_out_residuals(
     gamma_fitted_on: list[Any] = []
 
     def record(name: str, position: int, into: list[Any]) -> None:
-        original = getattr(cmapss_compare, name)
+        original = getattr(cmapss_fd001, name)
 
         def recorded(*args: Any, **kwargs: Any) -> Any:
             into.append(args[position])
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(cmapss_compare, name, recorded)
+        monkeypatch.setattr(cmapss_fd001, name, recorded)
 
     record("train_mean_model", 0, mean_fitted_on)
     record("train_gamma_model", 1, gamma_fitted_on)
     record("refit_gamma_to_posterior_mean", 1, gamma_fitted_on)
 
-    cmapss_compare.compare_models(mcd_config, seeds=1, prepare=_always(prepared))
+    cmapss_fd001.compare_models(mcd_config, seeds=1, prepare=_always(prepared))
 
     # Both staged models: the mean on the train split, and both Gamma fits
     # (after the mean stage, and the refit to the posterior mean) on the
@@ -518,22 +516,22 @@ def test_the_staged_gamma_fits_train_on_the_held_out_residuals(
 
 
 def test_the_joint_model_trains_on_train_and_validation_without_monitoring(
-    cmapss_compare: ModuleType,
+    cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     prepared = synthetic_prepared_data()
     runs: list[dict[str, Any]] = []
-    run_supervised = cmapss_compare.run_supervised
+    run_supervised = cmapss_fd001.run_supervised
 
     def record_run_supervised(**kwargs: Any) -> Any:
         runs.append(kwargs)
         return run_supervised(**kwargs)
 
-    monkeypatch.setattr(cmapss_compare, "run_supervised", record_run_supervised)
+    monkeypatch.setattr(cmapss_fd001, "run_supervised", record_run_supervised)
 
-    cmapss_compare.compare_models(mcd_config, seeds=1, prepare=_always(prepared))
+    cmapss_fd001.compare_models(mcd_config, seeds=1, prepare=_always(prepared))
 
     (run,) = runs
     assert run["validation"] is None
