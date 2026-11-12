@@ -136,11 +136,11 @@ class CmapssConfig:
     learning_rate: float = 1e-3
     mean_epochs: int = 100
     variance_epochs: int = 100
-    gamma_hidden_channels: int = 4
+    gamma_hidden_channels: int = 8
     gamma_weight_decay: float = 0.1
     joint_epochs: int = 100
     dropout_rate: float = 0.5
-    num_draws: int = 100
+    num_draws: int = 1000
     proxy_variance_floor_cycles: float = 5.0
     seed: int = 0
 
