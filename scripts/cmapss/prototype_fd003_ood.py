@@ -23,6 +23,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -37,6 +38,9 @@ from compare import (
     _train_staged_mcd,
     format_comparison_table,
 )
+
+from flax import nnx
+from stagereg.jax import PosteriorPredictive
 
 from ifac_safeprocess_2027.cmapss.data import (
     _ensure_cached_archive,
@@ -60,33 +64,37 @@ from ifac_safeprocess_2027.cmapss.preprocessing import (
 
 PLOT_UNIT = 94
 
-compare_module._TABLE_ROWS = (
-    *compare_module._TABLE_ROWS,
-    ("sigma_epi/sigma_tot", "epistemic_ratio"),
-)
+OOD_DROPPED_METRICS = ("nll",)
+"""Metrics left out of the FD003 table: the NLL is dominated by a few units."""
 
 
-def epistemic_ratio(model, windows: np.ndarray) -> float:
-    """Mean over windows of sigma_epistemic / sigma_total.
+class ClippedVariancePredictive(nnx.Module, pytree=False):
+    """A predictive whose aleatoric variance is clipped to `[low, high]`."""
 
-    sigma_epi^2 is the variance of the draws' means; sigma_tot^2 adds the draws' mean
-    aleatoric variance (law of total variance).
-    """
-    prediction = model(np.asarray(windows, dtype=np.float32))
-    draws = np.asarray(prediction.draws, dtype=float).reshape(
-        prediction.draws.shape[0], -1
-    )
-    aleatoric = np.broadcast_to(
-        np.asarray(prediction.aleatoric_variance, dtype=float),
-        prediction.draws.shape,
-    ).reshape(draws.shape)
-    if prediction.draw_mask is not None:
-        keep = np.asarray(prediction.draw_mask, dtype=bool).reshape(draws.shape[0], -1)
-        keep = keep.all(axis=1)
-        draws, aleatoric = draws[keep], aleatoric[keep]
-    epistemic_var = draws.var(axis=0)
-    total_var = epistemic_var + aleatoric.mean(axis=0)
-    return float(np.mean(np.sqrt(epistemic_var / total_var)))
+    def __init__(self, model: nnx.Module, low: float, high: float) -> None:
+        self.model = model
+        self.low = low
+        self.high = high
+
+    def __call__(self, inputs) -> PosteriorPredictive:
+        output = self.model(inputs)
+        return PosteriorPredictive(
+            draws=output.draws,
+            aleatoric_variance=jnp.clip(output.aleatoric_variance, self.low, self.high),
+            draw_mask=output.draw_mask,
+        )
+
+
+def aleatoric_variance_range(
+    model, windows: np.ndarray, chunk: int = 256
+) -> tuple[float, float]:
+    """Min and max aleatoric variance over every draw and window given."""
+    low, high = np.inf, -np.inf
+    for start in range(0, len(windows), chunk):
+        batch = np.asarray(windows[start : start + chunk], dtype=np.float32)
+        variance = np.asarray(model(batch).aleatoric_variance, dtype=float)
+        low, high = min(low, variance.min()), max(high, variance.max())
+    return float(low), float(high)
 
 
 def load_fd003() -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray]:
@@ -135,8 +143,20 @@ def main() -> None:
             ),
         }
         results: dict[str, list[ModelResult]] = {"FD001": [], "FD003": []}
+        scored = {}
         for name, (label, raw) in models.items():
             model = CyclesPredictive(raw, prepared.target_standardization)
+            low, high = aleatoric_variance_range(model, prepared.train_windows)
+            print(
+                f"[seed={config.seed} {name}] train aleatoric variance range "
+                f"[{low:.4g}, {high:.4g}] cycles^2",
+                flush=True,
+            )
+            scored[f"{name}+clip"] = (
+                f"{label} clipped",
+                ClippedVariancePredictive(model, low, high),
+            )
+        for name, (label, model) in scored.items():
             for split, windows, rul in (
                 ("FD001", prepared.test_windows, prepared.test_rul),
                 ("FD003", fd003_test_windows, fd003_rul),
@@ -144,7 +164,9 @@ def main() -> None:
                 metrics = evaluate_test_metrics(
                     model, windows, rul, epoch_metrics=COMPARISON_METRICS
                 )
-                metrics["epistemic_ratio"] = epistemic_ratio(model, windows)
+                if split == "FD003":
+                    for metric in OOD_DROPPED_METRICS:
+                        metrics.pop(metric)
                 print(f"[{split} {name} seed={config.seed}] {metrics}", flush=True)
                 results[split].append(ModelResult(name, label, model, metrics))
         for split in per_split:
@@ -155,7 +177,13 @@ def main() -> None:
             first_models = results["FD003"]
             first_fd003_train = apply_standardization(fd003_train_raw, stats)
 
+    all_rows = compare_module._TABLE_ROWS
     for split, comparisons in per_split.items():
+        compare_module._TABLE_ROWS = tuple(
+            row
+            for row in all_rows
+            if split != "FD003" or row[1] not in OOD_DROPPED_METRICS
+        )
         print(f"\n{split} test metrics over {args.seeds} seeds (mean ± std):")
         print(format_comparison_table(comparisons))
 
