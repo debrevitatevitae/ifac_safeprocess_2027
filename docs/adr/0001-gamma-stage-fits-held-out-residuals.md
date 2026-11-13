@@ -1,6 +1,6 @@
 # The Gamma stage fits held-out residuals
 
-The staged MC-Dropout models (`staged+mcd`, `staged+mcd+proxy`) in `fd001.py` fit their Gamma variance stage on **held-out residuals**: the mean's squared residuals on the validation split, which the mean stage never trained on. This holds for both Gamma fits, the one after the mean stage and the refit to the posterior predictive's mean.
+The staged MC-Dropout models (`staged+mcd`, `staged+mcd+proxy`) in `fd001_base.py` fit their Gamma variance stage on **held-out residuals**: the mean's squared residuals on the validation split, which the mean stage never trained on. This holds for both Gamma fits, the one after the mean stage and the refit to the posterior predictive's mean.
 
 ## Why
 

@@ -4,7 +4,7 @@ Question: how do the test metrics of `joint+mcd` ("joint") and
 `staged+mcd+proxy` ("staged") move with the dropout rate p?
 
 For each seed, prepares FD001 once, then for every p trains both models
-exactly as `fd001.py` does and scores them on the FD001 test split (RMSE,
+exactly as `fd001_base.py` does and scores them on the FD001 test split (RMSE,
 95% coverage, closed-form CRPS, NLL). At p=0 every draw is identical, so
 the predictive keeps a single draw.
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fd001 import _train_joint_mcd, _train_staged_mcd, score_on_test_split
+from fd001_base import _train_joint_mcd, _train_staged_mcd, score_on_test_split
 
 from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,

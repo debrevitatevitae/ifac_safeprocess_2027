@@ -415,7 +415,7 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
 ) -> None:
     plot_path = tmp_path / plot_name if plot_name else None
     plot_argv = ["--plot-path", str(plot_path)] if plot_path else []
-    monkeypatch.setattr(sys, "argv", ["fd001.py", *seeds_argv, *plot_argv])
+    monkeypatch.setattr(sys, "argv", ["fd001_base.py", *seeds_argv, *plot_argv])
     monkeypatch.setattr(cmapss_fd001, "CmapssConfig", lambda: mcd_config)
     prepared_with: list[Any] = []
     prepare = cmapss_fd001.prepare_cmapss_windows

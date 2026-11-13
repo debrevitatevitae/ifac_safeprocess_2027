@@ -9,7 +9,7 @@ f keeps the first round(f * 100) of them, so smaller subsets are nested in
 larger ones. The subset is drawn from the complete training set *before* the
 train/validation split: the joint model trains on all of it, the staged model
 splits it into its mean-stage (train) and Gamma-stage (validation) units, as
-`fd001.py` does. Epochs stay fixed, so smaller subsets take fewer steps.
+`fd001_base.py` does. Epochs stay fixed, so smaller subsets take fewer steps.
 Each model is scored on the full FD001 test split (RMSE, 95% coverage,
 closed-form CRPS, NLL).
 
@@ -31,7 +31,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fd001 import _train_joint_mcd, _train_staged_mcd, score_on_test_split
+from fd001_base import _train_joint_mcd, _train_staged_mcd, score_on_test_split
 
 from ifac_safeprocess_2027.cmapss.data import load_fd001_data
 from ifac_safeprocess_2027.cmapss.pipeline import (

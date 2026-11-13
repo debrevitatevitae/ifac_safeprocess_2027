@@ -1,7 +1,7 @@
 """PROTOTYPE (throwaway): out-of-distribution coverage on FD003 of FD001-trained models.
 
 Question: how well calibrated are `joint+mcd` and `staged+mcd+proxy`, trained
-on FD001 exactly as in `fd001.py`, on CMAPSS FD003 (same single operating
+on FD001 exactly as in `fd001_base.py`, on CMAPSS FD003 (same single operating
 condition, an extra fan-degradation fault mode)?
 
 * Scores both models on the FD003 test split (one last window per unit,
@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fd001 import (
+from fd001_base import (
     COMPARISON_METRICS,
     ModelResult,
     _train_joint_mcd,
