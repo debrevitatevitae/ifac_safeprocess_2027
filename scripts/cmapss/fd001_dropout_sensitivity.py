@@ -1,19 +1,22 @@
-"""PROTOTYPE, throwaway: sensitivity of the joint and staged models to the dropout rate.
+"""Sensitivity of the FD001 test metrics to the MC-Dropout rate.
 
-Question: how do the test metrics of `joint+mcd` ("joint") and
-`staged+mcd+proxy` ("staged") move with the dropout rate p?
+Models compared, trained as in `fd001_base.py` for every dropout rate:
 
-For each seed, prepares FD001 once, then for every p trains both models
-exactly as `fd001_base.py` does and scores them on the FD001 test split (RMSE,
-95% coverage, closed-form CRPS, NLL). At p=0 every draw is identical, so
-the predictive keeps a single draw.
+* `joint+mcd` ("joint"): the joint-trained baseline.
+* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
+  mean stage.
 
-Plots a 1x4 figure: one subplot per metric, p on the x-axis, one line per
-model (mean over seeds, shaded ± std).
+Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
+coverage, closed-form CRPS and NLL.
+
+Output: per-run metrics and one mean ± std table per metric printed to the
+console, plus a 1x4 figure with one subplot per metric, the dropout rate on the
+x-axis and one line per model.
 
 Run it with:
 
-    uv run python scripts/cmapss/prototype_dropout_sensitivity.py
+    uv run python scripts/cmapss/fd001_dropout_sensitivity.py \
+        [--seeds 5] [--rates 0 0.1 0.5] [--plot-path dropout.png]
 
 Smoke test: `--seeds 1 --rates 0 0.5 --epochs 1 --num-draws 10`.
 """

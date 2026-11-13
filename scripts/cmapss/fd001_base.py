@@ -1,48 +1,26 @@
-"""Compare the joint and staged MC-Dropout models on CMAPSS FD001 over several seeds.
+"""Train three MC-Dropout models on FD001/train and compare them on FD001/test.
 
-For each seed, prepares the FD001 data with `prepare_cmapss_windows`,
-drawing that seed's train/validation split, then trains three MC-Dropout
-models on it. Each trains once with dropout active, its only regularizer,
-and predicts with dropout active, as a posterior predictive over fixed
-dropout-mask sets:
+Models compared:
 
-* the **joint MC-Dropout model** (`joint+mcd`): one 1D-CNN backbone followed
-  by a Gaussian head, trained with `run_supervised` on the Gaussian negative
-  log-likelihood over the train and validation splits together, with no
-  validation monitoring; each draw keeps its own aleatoric variance;
-* the **staged MC-Dropout model** (`staged+mcd`): a 1D-CNN mean stage,
-  trained on the train split and monitored on the validation split,
-  followed by a narrower 1D-CNN Gamma variance stage, trained with weight
-  decay on the mean's held-out squared residuals on the validation split;
-  then a posterior stage with the `MCDropout` inference method that does
-  not train, its posterior being the trained mean network under dropout
-  masks. A fresh Gamma network is then re-fitted to the validation split's
-  squared residuals of the posterior predictive's mean, and the draws share
-  that variance;
-* the **staged MC-Dropout proxy-variance model** (`staged+mcd+proxy`): the
-  staged MC-Dropout model with its mean stage trained and validated on
-  `ProxyVarianceNLL` instead of the squared error. That is a Gaussian NLL
-  under a fictitious scale that shrinks linearly with the true RUL, from
-  the spread of the training units' lifetimes to
-  `proxy_variance_floor_cycles` at failure, so end-of-life windows weigh
-  most and the dropout spread is pushed down there.
+* `joint+mcd` (baseline): a 1D-CNN with a Gaussian head, trained jointly on
+  the Gaussian NLL.
+* `staged+mcd`: a 1D-CNN mean stage trained on the squared error, followed by
+  a Gamma variance stage fitted to the mean's held-out squared residuals.
+* `staged+mcd+proxy`: `staged+mcd` with its mean stage trained on a Gaussian
+  NLL under a proxy variance that shrinks with the true RUL.
 
-All three train on the standardized linear-RUL targets, and their
-predictions are mapped back to RUL cycles to be scored against the official
-FD001 test split on RMSE, 95% interval coverage, closed-form CRPS and NLL,
-each on the exact mixture. Every seed re-draws the train/validation split,
-re-fits the standardization on its train split, and re-initializes the
-models and their dropout masks.
+Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
+coverage, closed-form CRPS and NLL.
 
-It then draws the first seed's RUL curves, in cycles, one row per model,
-for the lifetime-spanning units of that seed's train split. Every model
-trained on those units, so the figure is for visualization only.
+Output: per-seed metrics and a mean ± std table printed to the console, plus a
+figure of the first seed's RUL curves, one row per model, for a few FD001/train
+units.
 
 Run it with:
 
-    uv run python scripts/cmapss/fd001_base.py --seeds 5
+    uv run python scripts/cmapss/fd001_base.py --seeds 5 [--plot-path rul.png]
 
-Pass `--plot-path` to save the figure instead of displaying it.
+`--plot-path` saves the figure instead of displaying it.
 """
 
 from __future__ import annotations

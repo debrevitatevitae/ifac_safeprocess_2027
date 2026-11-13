@@ -1,20 +1,26 @@
-"""PROTOTYPE (throwaway): out-of-distribution coverage on FD003 of FD001-trained models.
+"""Out-of-distribution performance on FD003/test of models trained on FD001/train.
 
-Question: how well calibrated are `joint+mcd` and `staged+mcd+proxy`, trained
-on FD001 exactly as in `fd001_base.py`, on CMAPSS FD003 (same single operating
-condition, an extra fan-degradation fault mode)?
+Models compared, trained as in `fd001_base.py`:
 
-* Scores both models on the FD003 test split (one last window per unit,
-  `RUL_FD003.txt`) and box-plots each metric over seeds, one box per model.
-  The FD001 test windows are only used for the 95% width ratio's denominator.
-* Plots the RUL curve of FD003 train unit 94 (run-to-failure), one row per
-  model, for the first seed.
+* `joint+mcd` ("joint"): the joint-trained baseline.
+* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
+  mean stage.
 
-FD003 is standardized with FD001's training statistics, as a deployed model
-would see it.
+Metrics scored on FD003/test, over seeds: RMSE, 95% interval coverage,
+closed-form CRPS and the ratio of the 95% interval width on FD003/test to that
+on FD001/test.
 
-    uv run python scripts/cmapss/fd003_ood.py --seeds 3 \
-        --plot-path fd003_unit94.png --metrics-plot-path fd003_metrics.png
+Output: per-seed metrics printed to the console, a box plot of each metric
+over seeds, one box per model, and a figure of the first seed's RUL curve for
+FD003/train unit 94, one row per model.
+
+Run it with:
+
+    uv run python scripts/cmapss/fd003_ood.py \
+        [--seeds 3] [--plot-path fd003_unit94.png] \
+        [--metrics-plot-path fd003_metrics.png]
+
+Without the path flags, the figures are displayed instead of saved.
 """
 
 from __future__ import annotations

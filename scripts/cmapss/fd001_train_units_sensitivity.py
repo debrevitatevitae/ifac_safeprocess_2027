@@ -1,24 +1,23 @@
-"""PROTOTYPE, throwaway: sensitivity of the joint and staged models to the training-set
-size.
+"""Sensitivity of the FD001 test metrics to the number of training units.
 
-Question: how do the test metrics of `joint+mcd` ("joint") and
-`staged+mcd+proxy` ("staged") move with the number of FD001 training units?
+Models compared, trained as in `fd001_base.py` on nested random subsets of the
+FD001/train units:
 
-For each seed, shuffles the 100 FD001 training units once; for every fraction
-f keeps the first round(f * 100) of them, so smaller subsets are nested in
-larger ones. The subset is drawn from the complete training set *before* the
-train/validation split: the joint model trains on all of it, the staged model
-splits it into its mean-stage (train) and Gamma-stage (validation) units, as
-`fd001_base.py` does. Epochs stay fixed, so smaller subsets take fewer steps.
-Each model is scored on the full FD001 test split (RMSE, 95% coverage,
-closed-form CRPS, NLL).
+* `joint+mcd` ("joint"): the joint-trained baseline.
+* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
+  mean stage.
 
-Plots a 1x4 figure: one subplot per metric, fraction of training units on
-the x-axis, one line per model (mean over seeds, shaded ± std).
+Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
+coverage, closed-form CRPS and NLL.
+
+Output: per-run metrics and one mean ± std table per metric printed to the
+console, plus a 1x4 figure with one subplot per metric, the fraction of
+training units on the x-axis and one line per model.
 
 Run it with:
 
-    uv run python scripts/cmapss/fd001_train_units_sensitivity.py
+    uv run python scripts/cmapss/fd001_train_units_sensitivity.py \
+        [--seeds 5] [--fractions 0.1 0.5 1.0] [--plot-path units.png]
 
 Smoke test: `--seeds 1 --fractions 0.1 1.0 --epochs 1 --num-draws 10`.
 """
