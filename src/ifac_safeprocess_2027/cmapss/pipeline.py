@@ -874,12 +874,17 @@ class PreparedCmapssData:
     target_standardization: TargetStandardization
 
 
-def prepare_cmapss_windows(config: CmapssConfig) -> PreparedCmapssData:
+def prepare_cmapss_windows(
+    config: CmapssConfig, *, train_units: Sequence[int] | None = None
+) -> PreparedCmapssData:
     """Load, split, standardize, and window the FD001 train/test splits.
 
     Args:
         config: Example configuration controlling the window length and
             the train/validation split.
+        train_units: The FD001 training unit IDs to keep before the
+            train/validation split; `None`, the default, keeps all of them.
+            The test split is unaffected.
 
     Returns:
         A `PreparedCmapssData` holding the windowed arrays, the
@@ -887,8 +892,18 @@ def prepare_cmapss_windows(config: CmapssConfig) -> PreparedCmapssData:
         standardization statistics. Those statistics are fit on the
         training subset only and reused for the other subsets; the test RUL
         stays in cycles.
+
+    Raises:
+        ValueError: If `train_units` names a unit absent from the FD001
+            training split.
     """
     train_data = load_fd001_data()
+    if train_units is not None:
+        unknown = set(train_units) - set(train_data["unit_id"])
+        if unknown:
+            raise ValueError(f"unknown FD001 training units: {sorted(unknown)}")
+        train_data = train_data[train_data["unit_id"].isin(train_units)]
+        train_data = train_data.reset_index(drop=True)
     train_df, validation_df = split_by_unit(
         train_data, test_size=config.validation_fraction, random_state=config.seed
     )

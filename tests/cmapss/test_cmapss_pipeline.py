@@ -521,3 +521,31 @@ def test_proxy_variance_nll_scores_predictions_under_the_schedule_scale(
         ],
         rtol=1e-5,
     )
+
+
+@pytest.mark.usefixtures("offline_fd001")
+def test_prepared_data_draws_both_subsets_from_the_given_train_units(
+    cmapss_pipeline: ModuleType, short_window_config: Any
+) -> None:
+    train_units = [2, 3, 5, 7, 8, 9]
+
+    prepared = cmapss_pipeline.prepare_cmapss_windows(
+        short_window_config, train_units=train_units
+    )
+
+    train_ids = set(prepared.train_trajectories["unit_id"])
+    validation_ids = set(prepared.validation_trajectories["unit_id"])
+    assert train_ids | validation_ids == set(train_units)
+    assert not train_ids & validation_ids
+    # The test split is untouched by the training-unit subset.
+    np.testing.assert_array_equal(
+        prepared.test_rul, cmapss_pipeline.load_fd001_test_rul()
+    )
+
+
+@pytest.mark.usefixtures("offline_fd001")
+def test_prepared_data_rejects_unknown_train_units(
+    cmapss_pipeline: ModuleType, short_window_config: Any
+) -> None:
+    with pytest.raises(ValueError, match="unknown"):
+        cmapss_pipeline.prepare_cmapss_windows(short_window_config, train_units=[1, 99])
