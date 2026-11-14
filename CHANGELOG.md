@@ -23,3 +23,6 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
 - `fd001_base.py` re-draws the train/validation split per seed; `compare_models`
   takes a `prepare` callable and each `SeedComparison` keeps its prepared data.
 - The figure draws the first seed's lifetime-spanning **train-split** units.
+- `fd003_ood.py` drops `--metrics-plot-path`: `--plot-path` now saves both
+  figures, the metrics one as `<stem>_metrics<suffix>`, so the metrics figure is
+  no longer lost when only `--plot-path` is passed.

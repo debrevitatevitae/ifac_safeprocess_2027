@@ -16,11 +16,11 @@ FD003/train unit 94, one row per model.
 
 Run it with:
 
-    uv run python scripts/cmapss/fd003_ood.py \
-        [--seeds 3] [--plot-path fd003_unit94.png] \
-        [--metrics-plot-path fd003_metrics.png]
+    uv run python scripts/cmapss/fd003_ood.py [--seeds 3] [--plot-path fd003.png]
 
-Without the path flags, the figures are displayed instead of saved.
+`--plot-path` saves the RUL-curve figure to that path and the metrics figure
+next to it as `<stem>_metrics<suffix>` (e.g. `fd003_metrics.png`), instead of
+displaying both.
 """
 
 from __future__ import annotations
@@ -151,8 +151,15 @@ def plot_metric_boxes(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seeds", type=int, default=3)
-    parser.add_argument("--plot-path", type=Path, default=None)
-    parser.add_argument("--metrics-plot-path", type=Path, default=None)
+    parser.add_argument(
+        "--plot-path",
+        type=Path,
+        default=None,
+        help=(
+            "Save the RUL-curve figure to this path and the metrics figure to "
+            "<stem>_metrics<suffix> next to it, instead of displaying both."
+        ),
+    )
     args = parser.parse_args()
 
     fd003_train_raw, fd003_test_raw, fd003_rul = load_fd003()
@@ -214,8 +221,6 @@ def main() -> None:
             first_fd003_train = apply_standardization(fd003_train_raw, stats)
 
     metrics_figure = plot_metric_boxes(scores, args.seeds)
-    if args.metrics_plot_path:
-        metrics_figure.savefig(args.metrics_plot_path, dpi=150)
 
     figure, grid = plt.subplots(
         len(first_models), 1, figsize=(9, 3.2 * len(first_models)), sharex=True
@@ -240,6 +245,11 @@ def main() -> None:
     figure.tight_layout()
     if args.plot_path:
         figure.savefig(args.plot_path, dpi=150)
+        metrics_path = args.plot_path.with_name(
+            f"{args.plot_path.stem}_metrics{args.plot_path.suffix}"
+        )
+        metrics_figure.savefig(metrics_path, dpi=150)
+        print(f"\nSaved figures to {args.plot_path} and {metrics_path}")
     else:
         plt.show()
 
