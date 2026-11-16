@@ -17,7 +17,9 @@ training units on the x-axis and one line per model.
 Run it with:
 
     uv run python scripts/cmapss/fd001_train_units_sensitivity.py \
-        [--seeds 5] [--fractions 0.1 0.5 1.0] [--plot-path units.png]
+        [--seeds 5] [--fractions 0.1 0.5 1.0] [--jobs 8] [--plot-path units.png]
+
+`--jobs` trains the (seed, fraction) runs in that many processes.
 
 Smoke test: `--seeds 1 --fractions 0.1 1.0 --epochs 1 --num-draws 10`.
 """
@@ -43,6 +45,7 @@ from ifac_safeprocess_2027.cmapss.preprocessing import (
     fit_proxy_variance_schedule,
     unit_lifetimes,
 )
+from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
 FRACTIONS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
 MODELS = ("joint", "staged")
@@ -55,38 +58,65 @@ METRICS = (
 COLORS = {"joint": "#2a78d6", "staged": "#eb6834"}
 
 
-def run(config: CmapssConfig, seeds: int, fractions: list[float]) -> dict:
-    """Return results[model][f] -> list of metric dicts, one per seed."""
+def run_one(
+    seed_config: CmapssConfig, f: float, train_units: list[int]
+) -> dict[str, dict[str, float]]:
+    """Train and score both models on `train_units`: metrics by model name."""
+    prepared = prepare_cmapss_windows(seed_config, train_units=train_units)
+    schedule = fit_proxy_variance_schedule(
+        unit_lifetimes(prepared.train_trajectories),
+        prepared.target_standardization,
+        floor_cycles=seed_config.proxy_variance_floor_cycles,
+    )
+    trained = {
+        "joint": _train_joint_mcd(prepared, seed_config),
+        "staged": _train_staged_mcd(
+            prepared, seed_config, objective=ProxyVarianceNLL(schedule)
+        ),
+    }
+    scores = {}
+    for name, model in trained.items():
+        cycles = CyclesPredictive(model, prepared.target_standardization)
+        scores[name] = metrics = score_on_test_split(cycles, prepared)
+        values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
+        print(
+            f"[{name} f={f} units={len(train_units)} seed={seed_config.seed}] {values}",
+            flush=True,
+        )
+    return scores
+
+
+def _run_task(
+    task: tuple[CmapssConfig, float, list[int]],
+) -> dict[str, dict[str, float]]:
+    """`run_one` on a `(seed_config, f, train_units)` triple, for `process_map`."""
+    return run_one(*task)
+
+
+def run(
+    config: CmapssConfig, seeds: int, fractions: list[float], jobs: int = 1
+) -> dict:
+    """Return results[model][f] -> list of metric dicts, one per seed.
+
+    The (seed, fraction) runs are independent, and train in up to `jobs` processes.
+    The largest fractions are the slowest, so they are submitted first.
+    """
     all_units = np.unique(load_fd001_data()["unit_id"])
-    results = {m: {f: [] for f in fractions} for m in MODELS}
+    tasks = []
     for index in range(seeds):
         seed_config = dataclasses.replace(config, seed=config.seed + index)
         order = np.random.default_rng(seed_config.seed).permutation(all_units)
         for f in fractions:
             n_units = max(2, round(f * all_units.size))
-            prepared = prepare_cmapss_windows(
-                seed_config, train_units=order[:n_units].tolist()
-            )
-            schedule = fit_proxy_variance_schedule(
-                unit_lifetimes(prepared.train_trajectories),
-                prepared.target_standardization,
-                floor_cycles=seed_config.proxy_variance_floor_cycles,
-            )
-            trained = {
-                "joint": _train_joint_mcd(prepared, seed_config),
-                "staged": _train_staged_mcd(
-                    prepared, seed_config, objective=ProxyVarianceNLL(schedule)
-                ),
-            }
-            for name, model in trained.items():
-                cycles = CyclesPredictive(model, prepared.target_standardization)
-                metrics = score_on_test_split(cycles, prepared)
-                results[name][f].append(metrics)
-                values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
-                print(
-                    f"[{name} f={f} units={n_units} seed={seed_config.seed}] {values}",
-                    flush=True,
-                )
+            tasks.append((seed_config, f, order[:n_units].tolist()))
+    tasks.sort(key=lambda task: -len(task[2]))
+    results = {m: {f: [] for f in fractions} for m in MODELS}
+    scored = process_map(_run_task, tasks, jobs=jobs)
+    for (seed_config, f, _), scores in sorted(
+        zip(tasks, scored, strict=True), key=lambda pair: pair[0][0].seed
+    ):
+        for name, metrics in scores.items():
+            results[name][f].append(metrics)
     return results
 
 
@@ -141,6 +171,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None, help="Override all epochs.")
     parser.add_argument("--num-draws", type=int, default=None)
     parser.add_argument("--plot-path", type=Path, default=None)
+    add_jobs_argument(parser)
     args = parser.parse_args()
 
     config = CmapssConfig()
@@ -154,7 +185,7 @@ def main() -> None:
     if args.num_draws is not None:
         config = dataclasses.replace(config, num_draws=args.num_draws)
 
-    results = run(config, args.seeds, args.fractions)
+    results = run(config, args.seeds, args.fractions, jobs=args.jobs)
     summarize(results, args.fractions)
     plot(results, args.fractions, args.plot_path)
 

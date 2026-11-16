@@ -18,9 +18,10 @@ units.
 
 Run it with:
 
-    uv run python scripts/cmapss/fd001_base.py --seeds 5 [--plot-path rul.png]
+    uv run python scripts/cmapss/fd001_base.py --seeds 5 [--jobs 5] [--plot-path rul.png]
 
-`--plot-path` saves the figure instead of displaying it.
+`--plot-path` saves the figure instead of displaying it. `--jobs` trains the seeds in
+that many processes: the first seed in this one, the others in workers.
 """
 
 from __future__ import annotations
@@ -65,6 +66,7 @@ from ifac_safeprocess_2027.cmapss.preprocessing import (
     select_lifetime_spanning_units,
     unit_lifetimes,
 )
+from ifac_safeprocess_2027.parallel import add_jobs_argument, spawn_pool
 
 COMPARISON_METRICS: tuple[EpochMetric, ...] = (*TEST_METRICS, NegativeLogLikelihood())
 """The comparison's test metrics: RMSE, 95% coverage, closed-form CRPS and NLL."""
@@ -166,14 +168,15 @@ class ModelResult:
         label: The model's row label in the figure, e.g. `"Staged
             MC-Dropout model"`.
         model: The trained model, returning a `PosteriorPredictive` in RUL
-            cycles.
+            cycles; `None` if it was trained in a worker process, as trained
+            models cannot be sent back.
         metrics: The model's `COMPARISON_METRICS` on the test split, by
             metric name.
     """
 
     name: str
     label: str
-    model: nnx.Module
+    model: nnx.Module | None
     metrics: dict[str, float]
 
 
@@ -338,12 +341,35 @@ def _train_and_score_seed(
     )
 
 
+def _train_and_score_seed_in_worker(
+    config: CmapssConfig,
+    prepare: Callable[[CmapssConfig], PreparedCmapssData],
+    on_run: RunReporter,
+) -> SeedComparison:
+    """`_train_and_score_seed` for a worker process: the trained models are dropped.
+
+    Args:
+        config: Example configuration; its `seed` initializes every model.
+        prepare: Prepares the FD001 windows from `config`.
+        on_run: Called, in the worker, as each model is scored.
+
+    Returns:
+        The seed's `SeedComparison`, every `ModelResult.model` set to `None`.
+    """
+    result = _train_and_score_seed(prepare(config), config, on_run=on_run)
+    return dataclasses.replace(
+        result,
+        models=tuple(dataclasses.replace(model, model=None) for model in result.models),
+    )
+
+
 def compare_models(
     config: CmapssConfig,
     *,
     seeds: int,
     prepare: Callable[[CmapssConfig], PreparedCmapssData] = prepare_cmapss_windows,
     on_run: RunReporter = _ignore_run,
+    jobs: int = 1,
 ) -> list[SeedComparison]:
     """Prepare the data, then train and score the comparison's models, once per seed.
 
@@ -367,17 +393,30 @@ def compare_models(
             `prepare_cmapss_windows` by default.
         on_run: Called with the model's name, the seed and the test metrics
             as soon as each run is scored. Does nothing by default.
+        jobs: Number of processes to train the seeds in. `1`, the default,
+            trains them one after the other. Above that, the first seed trains
+            in this process while the others train in `jobs - 1` spawned
+            workers, so `prepare` and `on_run` must be picklable, and only the
+            first seed keeps its trained models.
 
     Returns:
         One `SeedComparison` per seed, in seed order.
     """
-    results = []
-    for index in range(seeds):
-        seed_config = dataclasses.replace(config, seed=config.seed + index)
-        results.append(
+    configs = [
+        dataclasses.replace(config, seed=config.seed + index) for index in range(seeds)
+    ]
+    if jobs == 1 or seeds == 1:
+        return [
             _train_and_score_seed(prepare(seed_config), seed_config, on_run=on_run)
-        )
-    return results
+            for seed_config in configs
+        ]
+    with spawn_pool(min(jobs - 1, seeds - 1)) as pool:
+        others = [
+            pool.submit(_train_and_score_seed_in_worker, seed_config, prepare, on_run)
+            for seed_config in configs[1:]
+        ]
+        first = _train_and_score_seed(prepare(configs[0]), configs[0], on_run=on_run)
+        return [first, *(future.result() for future in others)]
 
 
 _TABLE_ROWS = (
@@ -446,7 +485,7 @@ def print_run(model: str, seed: int, metrics: dict[str, float]) -> None:
         metrics: The model's test metrics by name.
     """
     values = ", ".join(f"{name}={value:.4f}" for name, value in metrics.items())
-    print(f"[{model} seed={seed}] {values}")
+    print(f"[{model} seed={seed}] {values}", flush=True)
 
 
 def main() -> None:
@@ -455,8 +494,9 @@ def main() -> None:
     Compares `joint+mcd`, `staged+mcd` and `staged+mcd+proxy`, in that order, and draws
     every model as one row of the figure.
 
-    Pass `--seeds` to set the number of seeds (default 5) and `--plot-path` to save the
-    first seed's RUL-curves figure to that path instead of displaying it.
+    Pass `--seeds` to set the number of seeds (default 5), `--jobs` to train them in
+    that many processes (default 1) and `--plot-path` to save the first seed's RUL-
+    curves figure to that path instead of displaying it.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -474,13 +514,20 @@ def main() -> None:
             "model, to this path instead of displaying it."
         ),
     )
+    add_jobs_argument(parser)
     args = parser.parse_args()
     if args.seeds <= 0:
         parser.error("--seeds must be positive.")
+    if args.jobs <= 0:
+        parser.error("--jobs must be positive.")
 
     config = CmapssConfig()
     results = compare_models(
-        config, seeds=args.seeds, prepare=prepare_cmapss_windows, on_run=print_run
+        config,
+        seeds=args.seeds,
+        prepare=prepare_cmapss_windows,
+        on_run=print_run,
+        jobs=args.jobs,
     )
     print(f"\nFD001 test metrics over {args.seeds} seeds (mean ± std):")
     print(format_comparison_table(results))

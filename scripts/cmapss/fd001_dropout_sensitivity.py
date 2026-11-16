@@ -16,7 +16,9 @@ x-axis and one line per model.
 Run it with:
 
     uv run python scripts/cmapss/fd001_dropout_sensitivity.py \
-        [--seeds 5] [--rates 0 0.1 0.5] [--plot-path dropout.png]
+        [--seeds 5] [--rates 0 0.1 0.5] [--jobs 8] [--plot-path dropout.png]
+
+`--jobs` trains the (seed, rate) runs in that many processes.
 
 Smoke test: `--seeds 1 --rates 0 0.5 --epochs 1 --num-draws 10`.
 """
@@ -41,6 +43,7 @@ from ifac_safeprocess_2027.cmapss.preprocessing import (
     fit_proxy_variance_schedule,
     unit_lifetimes,
 )
+from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
 RATES = (0.0, 0.1, 0.3, 0.5, 0.7, 0.9)
 MODELS = ("joint", "staged")
@@ -53,35 +56,55 @@ METRICS = (
 COLORS = {"joint": "#2a78d6", "staged": "#eb6834"}
 
 
-def run(config: CmapssConfig, seeds: int, rates: list[float]) -> dict:
-    """Return results[model][p] -> list of metric dicts, one per seed."""
+def run_one(seed_config: CmapssConfig, p: float) -> dict[str, dict[str, float]]:
+    """Train and score both models at dropout rate `p`: metrics by model name."""
+    prepared = prepare_cmapss_windows(seed_config)
+    schedule = fit_proxy_variance_schedule(
+        unit_lifetimes(prepared.train_trajectories),
+        prepared.target_standardization,
+        floor_cycles=seed_config.proxy_variance_floor_cycles,
+    )
+    p_config = dataclasses.replace(
+        seed_config,
+        dropout_rate=p,
+        num_draws=1 if p == 0.0 else seed_config.num_draws,
+    )
+    trained = {
+        "joint": _train_joint_mcd(prepared, p_config),
+        "staged": _train_staged_mcd(
+            prepared, p_config, objective=ProxyVarianceNLL(schedule)
+        ),
+    }
+    scores = {}
+    for name, model in trained.items():
+        cycles = CyclesPredictive(model, prepared.target_standardization)
+        scores[name] = metrics = score_on_test_split(cycles, prepared)
+        values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
+        print(f"[{name} p={p} seed={seed_config.seed}] {values}", flush=True)
+    return scores
+
+
+def _run_task(task: tuple[CmapssConfig, float]) -> dict[str, dict[str, float]]:
+    """`run_one` on a `(seed_config, p)` pair, for `process_map`."""
+    return run_one(*task)
+
+
+def run(config: CmapssConfig, seeds: int, rates: list[float], jobs: int = 1) -> dict:
+    """Return results[model][p] -> list of metric dicts, one per seed.
+
+    The (seed, rate) runs are independent, and train in up to `jobs` processes.
+    """
+    tasks = [
+        (dataclasses.replace(config, seed=config.seed + index), p)
+        for index in range(seeds)
+        for p in rates
+    ]
     results = {m: {p: [] for p in rates} for m in MODELS}
-    for index in range(seeds):
-        seed_config = dataclasses.replace(config, seed=config.seed + index)
-        prepared = prepare_cmapss_windows(seed_config)
-        schedule = fit_proxy_variance_schedule(
-            unit_lifetimes(prepared.train_trajectories),
-            prepared.target_standardization,
-            floor_cycles=seed_config.proxy_variance_floor_cycles,
-        )
-        for p in rates:
-            p_config = dataclasses.replace(
-                seed_config,
-                dropout_rate=p,
-                num_draws=1 if p == 0.0 else seed_config.num_draws,
-            )
-            trained = {
-                "joint": _train_joint_mcd(prepared, p_config),
-                "staged": _train_staged_mcd(
-                    prepared, p_config, objective=ProxyVarianceNLL(schedule)
-                ),
-            }
-            for name, model in trained.items():
-                cycles = CyclesPredictive(model, prepared.target_standardization)
-                metrics = score_on_test_split(cycles, prepared)
-                results[name][p].append(metrics)
-                values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
-                print(f"[{name} p={p} seed={seed_config.seed}] {values}", flush=True)
+    for (_, p), scores in zip(
+        tasks, process_map(_run_task, tasks, jobs=jobs), strict=True
+    ):
+        for name, metrics in scores.items():
+            results[name][p].append(metrics)
     return results
 
 
@@ -133,6 +156,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=None, help="Override all epochs.")
     parser.add_argument("--num-draws", type=int, default=None)
     parser.add_argument("--plot-path", type=Path, default=None)
+    add_jobs_argument(parser)
     args = parser.parse_args()
 
     config = CmapssConfig()
@@ -146,7 +170,7 @@ def main() -> None:
     if args.num_draws is not None:
         config = dataclasses.replace(config, num_draws=args.num_draws)
 
-    results = run(config, args.seeds, args.rates)
+    results = run(config, args.seeds, args.rates, jobs=args.jobs)
     summarize(results, args.rates)
     plot(results, args.rates, args.plot_path)
 

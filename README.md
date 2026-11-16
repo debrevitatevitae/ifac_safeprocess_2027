@@ -14,6 +14,8 @@ Run the scripts with:
 uv run python scripts/cmapss/<script_name>.py
 ```
 
+Every script takes `--jobs N` to train its independent runs (seeds, and the swept values in the sensitivity scripts) in `N` processes, up to the number of CPU cores. The results do not depend on `N`.
+
 ## Download the NASA C-MAPSS Dataset
 
 These results are prognostics prediction on the NASA Commercial Modular Aero-Propulsion System Simulation (CMAPSS) dataset, described in [(Saxena et al., 2008)](https://ieeexplore.ieee.org/document/4711414).
