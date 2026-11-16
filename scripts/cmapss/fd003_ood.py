@@ -31,6 +31,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
@@ -98,16 +99,35 @@ class ClippedVariancePredictive(nnx.Module, pytree=False):
         )
 
 
+@nnx.jit
+def _aleatoric_variance_extremes(
+    model, batch: jax.Array
+) -> tuple[jax.Array, jax.Array]:
+    """Min and max aleatoric variance over every draw and window of a batch."""
+    variance = model(batch).aleatoric_variance
+    return variance.min(), variance.max()
+
+
 def aleatoric_variance_range(
-    model, windows: np.ndarray, chunk: int = 256
+    model, windows: np.ndarray, chunk: int = 64
 ) -> tuple[float, float]:
-    """Min and max aleatoric variance over every draw and window given."""
-    low, high = np.inf, -np.inf
-    for start in range(0, len(windows), chunk):
-        batch = np.asarray(windows[start : start + chunk], dtype=np.float32)
-        variance = np.asarray(model(batch).aleatoric_variance, dtype=float)
-        low, high = min(low, variance.min()), max(high, variance.max())
-    return float(low), float(high)
+    """Min and max aleatoric variance over every draw and window given.
+
+    Each chunk is reduced in one compiled pass. The last chunk is padded with copies of
+    the last window, so every chunk has the same shape and compiles once; repeated
+    windows leave the min and max unchanged.
+    """
+    windows = np.asarray(windows, dtype=np.float32)
+    padding = -len(windows) % chunk
+    windows = np.concatenate([windows, np.repeat(windows[-1:], padding, axis=0)])
+    lows, highs = zip(
+        *(
+            _aleatoric_variance_extremes(model, windows[start : start + chunk])
+            for start in range(0, len(windows), chunk)
+        ),
+        strict=True,
+    )
+    return float(jnp.min(jnp.stack(lows))), float(jnp.max(jnp.stack(highs)))
 
 
 def mean_interval_width(model, windows: np.ndarray, level: float = 0.95) -> float:
