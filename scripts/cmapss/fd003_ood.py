@@ -190,7 +190,8 @@ def train_and_score_seed(
     schedule = fit_proxy_variance_schedule(
         unit_lifetimes(prepared.train_trajectories),
         prepared.target_standardization,
-        floor_cycles=config.proxy_variance_floor_cycles,
+        prognosability=config.proxy_variance_prognosability,
+        epsilon_cycles=config.proxy_variance_epsilon_cycles,
     )
     models = {
         "joint": ("Joint MC-Dropout", _train_joint_mcd(prepared, config)),

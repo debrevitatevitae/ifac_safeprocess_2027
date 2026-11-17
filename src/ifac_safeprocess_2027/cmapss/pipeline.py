@@ -122,9 +122,14 @@ class CmapssConfig:
             dropout active. Dropout is their only regularizer.
         num_draws: Number of dropout-mask sets an MC-Dropout model's posterior
             predictive mixes.
-        proxy_variance_floor_cycles: End-of-life scale, in cycles, of the
-            proxy-variance schedule the staged MC-Dropout proxy model's mean
-            stage is trained under; see `ProxyVarianceNLL`.
+        proxy_variance_prognosability: Prognosability, in `[0, 1]`, setting
+            the end-of-life floor `sigma_0 * (1 - prognosability) + epsilon`
+            of the proxy-variance schedule the staged MC-Dropout proxy
+            model's mean stage is trained under; see `ProxyVarianceNLL` and
+            `fit_proxy_variance_schedule`. Defaults to 0.87, the C-MAPSS
+            value reported in the literature.
+        proxy_variance_epsilon_cycles: Positive offset, in cycles, of that
+            floor, keeping it above zero.
         seed: Base JAX random seed for splitting, model init, and training.
     """
 
@@ -141,7 +146,8 @@ class CmapssConfig:
     joint_epochs: int = 100
     dropout_rate: float = 0.5
     num_draws: int = 1000
-    proxy_variance_floor_cycles: float = 5.0
+    proxy_variance_prognosability: float = 0.87
+    proxy_variance_epsilon_cycles: float = 1e-6
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -150,8 +156,9 @@ class CmapssConfig:
         Raises:
             ValueError: If sizes, epochs or draws are not positive, the
                 Gamma weight decay is negative, the validation fraction is
-                not in (0, 1), the dropout rate is not in [0, 1), or the
-                proxy-variance floor is not positive.
+                not in (0, 1), the dropout rate is not in [0, 1), the
+                proxy-variance prognosability is not in [0, 1], or its
+                epsilon is not positive.
         """
         if self.window_length <= 0 or self.batch_size <= 0:
             raise ValueError("window_length and batch_size must be positive.")
@@ -171,8 +178,10 @@ class CmapssConfig:
             raise ValueError("dropout_rate must be within [0, 1).")
         if self.num_draws <= 0:
             raise ValueError("num_draws must be positive.")
-        if not self.proxy_variance_floor_cycles > 0.0:
-            raise ValueError("proxy_variance_floor_cycles must be positive.")
+        if not 0.0 <= self.proxy_variance_prognosability <= 1.0:
+            raise ValueError("proxy_variance_prognosability must be within [0, 1].")
+        if not self.proxy_variance_epsilon_cycles > 0.0:
+            raise ValueError("proxy_variance_epsilon_cycles must be positive.")
 
 
 def make_window_loader(

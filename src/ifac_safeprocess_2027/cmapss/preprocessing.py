@@ -237,27 +237,38 @@ def fit_proxy_variance_schedule(
     lifetimes: np.ndarray,
     target_standardization: TargetStandardization,
     *,
-    floor_cycles: float,
+    prognosability: float,
+    epsilon_cycles: float,
 ) -> ProxyVarianceSchedule:
     """Fit a `ProxyVarianceSchedule` to the training units' lifetimes.
+
+    The schedule is `clip(sigma_0 * rul / mean_lifetime, sigma_min, sigma_0)`
+    with `sigma_0` the lifetimes' population standard deviation (`ddof=0`)
+    and `sigma_min = sigma_0 * (1 - prognosability) + epsilon_cycles`: the
+    more prognosable the fleet, the more the end-of-life spread shrinks
+    relative to the spread of lifetimes.
 
     Args:
         lifetimes: The training units' lifetimes in cycles, one per unit; at
             least one, all positive.
         target_standardization: The statistics the training targets were
             standardized with.
-        floor_cycles: The scale at end of life, in cycles; positive.
+        prognosability: The fleet's prognosability, in `[0, 1]`: the share of
+            the lifetime spread gone at end of life.
+        epsilon_cycles: Positive offset of the floor, in cycles, keeping it
+            above zero when `prognosability` is 1 or the lifetimes are equal.
 
     Returns:
-        The schedule starting at the lifetimes' population standard
-        deviation (`ddof=0`), raised to `floor_cycles` if below it, and
-        reaching it at their mean.
+        The schedule starting at `sigma_0`, raised to `sigma_min` if below
+        it, reaching it at the lifetimes' mean and floored at `sigma_min`.
     """
     values = np.asarray(lifetimes, dtype=float)
+    spread = float(values.std(ddof=0))
+    floor = spread * (1.0 - prognosability) + epsilon_cycles
     return ProxyVarianceSchedule(
-        initial_scale=max(float(values.std(ddof=0)), floor_cycles),
+        initial_scale=max(spread, floor),
         reference_rul=float(values.mean()),
-        floor=floor_cycles,
+        floor=floor,
         target_standardization=target_standardization,
     )
 

@@ -66,7 +66,8 @@ def run_one(
     schedule = fit_proxy_variance_schedule(
         unit_lifetimes(prepared.train_trajectories),
         prepared.target_standardization,
-        floor_cycles=seed_config.proxy_variance_floor_cycles,
+        prognosability=seed_config.proxy_variance_prognosability,
+        epsilon_cycles=seed_config.proxy_variance_epsilon_cycles,
     )
     trained = {
         "joint": _train_joint_mcd(prepared, seed_config),

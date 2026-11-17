@@ -62,7 +62,8 @@ def run_one(seed_config: CmapssConfig, p: float) -> dict[str, dict[str, float]]:
     schedule = fit_proxy_variance_schedule(
         unit_lifetimes(prepared.train_trajectories),
         prepared.target_standardization,
-        floor_cycles=seed_config.proxy_variance_floor_cycles,
+        prognosability=seed_config.proxy_variance_prognosability,
+        epsilon_cycles=seed_config.proxy_variance_epsilon_cycles,
     )
     p_config = dataclasses.replace(
         seed_config,

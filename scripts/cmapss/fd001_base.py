@@ -326,7 +326,8 @@ def _train_and_score_seed(
     schedule = fit_proxy_variance_schedule(
         unit_lifetimes(prepared.train_trajectories),
         prepared.target_standardization,
-        floor_cycles=config.proxy_variance_floor_cycles,
+        prognosability=config.proxy_variance_prognosability,
+        epsilon_cycles=config.proxy_variance_epsilon_cycles,
     )
     proxy_model = _train_staged_mcd(
         prepared, config, objective=ProxyVarianceNLL(schedule)
