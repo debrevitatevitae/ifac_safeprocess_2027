@@ -1,17 +1,54 @@
-"""1D-convolutional staged and joint RUL models for windowed CMAPSS data.
+"""Staged and joint RUL models for windowed CMAPSS data.
 
-PROTOTYPE (branch `prototype/lstm-backbone`): every model below builds an
-`LstmBackbone` instead of a `Cnn1DBackbone`. The `Cnn1D*` names, and the
-`hidden_channels`/`kernel_size` arguments, are kept only so the pipeline runs
-unchanged; the LSTM ignores them.
+PROTOTYPE (branch `prototype/lstm-backbone`): the mean and joint networks can
+use either a 1D-CNN (`Cnn1DBackbone`) or an LSTM (`LstmBackbone`) backbone,
+and the Gamma network a single-convolution backbone (`GammaCnnBackbone`).
+Each model takes an already-built backbone; `pipeline.build_backbone` builds
+one from its network configuration. The `Cnn1D*` model names are kept so
+the pipeline and scripts run unchanged; they no longer imply a CNN.
 """
 
 from __future__ import annotations
+
+from typing import Protocol
 
 import jax
 import jax.numpy as jnp
 from flax import nnx
 from stagereg.jax import Gamma, GammaHead, Gaussian, GaussianHead
+
+
+class Backbone(Protocol):
+    """A feature extractor mapping windows to `features`-wide vectors."""
+
+    features: int
+
+    def __call__(
+        self, inputs: jax.Array, *, dropout_key: jax.Array | None = None
+    ) -> jax.Array:
+        """Map windows ``(batch, window_length, n_sensors)`` to ``(batch,
+        features)``."""
+        ...
+
+
+def _batch_shared_dropouts(dropout_rate: float, count: int, rngs: nnx.Rngs) -> nnx.List:
+    """Build `count` dropout layers sharing one mask across the batch axis.
+
+    At rate 0 they draw nothing from `rngs`, so the backbone's state is that
+    of a backbone without dropout.
+    """
+    dropout_rngs = rngs if dropout_rate > 0.0 else None
+    return nnx.List(
+        [
+            nnx.Dropout(dropout_rate, broadcast_dims=(0,), rngs=dropout_rngs)
+            for _ in range(count)
+        ]
+    )
+
+
+def _dropout_key(dropout_key: jax.Array | None, index: int) -> jax.Array | None:
+    """Return the key of dropout layer `index`, or `None` for its own stream."""
+    return None if dropout_key is None else jax.random.fold_in(dropout_key, index)
 
 
 class Cnn1DBackbone(nnx.Module):
@@ -47,6 +84,7 @@ class Cnn1DBackbone(nnx.Module):
             rngs: NNX random-number generators used to initialize parameters
                 and, at a positive rate, the dropout masks' streams.
         """
+        self.features = hidden_channels
         self.conv1 = nnx.Conv(
             in_features=n_sensors,
             out_features=hidden_channels,
@@ -61,15 +99,9 @@ class Cnn1DBackbone(nnx.Module):
             padding="SAME",
             rngs=rngs,
         )
-        # Built after every parameter, and only at a positive rate, so that a
-        # rate of 0 draws nothing from `rngs` and leaves the state unchanged.
-        dropout_rngs = rngs if dropout_rate > 0.0 else None
-        self.dropouts = nnx.List(
-            [
-                nnx.Dropout(dropout_rate, broadcast_dims=(0,), rngs=dropout_rngs)
-                for _ in range(2)
-            ]
-        )
+        # Built after every parameter, so that a rate of 0 draws nothing from
+        # `rngs` and leaves the state unchanged.
+        self.dropouts = _batch_shared_dropouts(dropout_rate, 2, rngs)
 
     def __call__(
         self, inputs: jax.Array, *, dropout_key: jax.Array | None = None
@@ -91,108 +123,148 @@ class Cnn1DBackbone(nnx.Module):
             zip((self.conv1, self.conv2), self.dropouts, strict=True)
         ):
             hidden = nnx.relu(conv(hidden))
-            key = (
-                None if dropout_key is None else jax.random.fold_in(dropout_key, index)
-            )
-            hidden = dropout(hidden, rngs=key)
+            hidden = dropout(hidden, rngs=_dropout_key(dropout_key, index))
         return jnp.mean(hidden, axis=1)
 
 
-LSTM_FEATURES = 8
-"""Width of `LstmBackbone`'s output, i.e. of its last FC layer."""
-
-
 class LstmBackbone(nnx.Module):
-    """PROTOTYPE: LSTM(32, seq) -> dropout -> LSTM(64, last) -> dropout -> FC(8) -> FC(8).
+    """PROTOTYPE: LSTM(seq) -> dropout -> LSTM(last) -> dropout -> FC -> FC.
 
     Dropout masks are shared across the batch axis (`broadcast_dims=(0,)`), as
-    `MCDropout` requires. `hidden_channels` and `kernel_size` are accepted and
-    ignored so the CNN's call sites run unchanged.
+    `MCDropout` requires, and, as in `Cnn1DBackbone`, a rate of 0 leaves the
+    state unchanged.
     """
 
     def __init__(
         self,
         n_sensors: int,
         *,
-        hidden_channels: int = 16,
-        kernel_size: int = 5,
+        hidden_units_layer_1: int = 32,
+        hidden_units_layer_2: int = 64,
+        hidden_units_fc_1: int = 8,
+        hidden_units_fc_2: int = 8,
         dropout_rate: float = 0.0,
         rngs: nnx.Rngs,
     ) -> None:
-        del hidden_channels, kernel_size
-        self.lstm1 = nnx.OptimizedLSTMCell(n_sensors, 32, rngs=rngs)
-        self.lstm2 = nnx.OptimizedLSTMCell(32, 64, rngs=rngs)
-        self.fc1 = nnx.Linear(64, LSTM_FEATURES, rngs=rngs)
-        self.fc2 = nnx.Linear(LSTM_FEATURES, LSTM_FEATURES, rngs=rngs)
-        dropout_rngs = rngs if dropout_rate > 0.0 else None
-        self.dropouts = nnx.List(
-            [
-                nnx.Dropout(dropout_rate, broadcast_dims=(0,), rngs=dropout_rngs)
-                for _ in range(2)
-            ]
+        """Initialize the two LSTM layers and the two FC layers.
+
+        Args:
+            n_sensors: Number of sensor channels in the windowed input.
+            hidden_units_layer_1: Width of the first LSTM, which returns its
+                whole sequence.
+            hidden_units_layer_2: Width of the second LSTM, whose last step
+                feeds the FC layers.
+            hidden_units_fc_1: Width of the first FC layer.
+            hidden_units_fc_2: Width of the second FC layer, the backbone's
+                output.
+            dropout_rate: Dropout rate after each LSTM; 0 disables dropout.
+            rngs: NNX random-number generators used to initialize parameters
+                and, at a positive rate, the dropout masks' streams.
+        """
+        self.features = hidden_units_fc_2
+        self.lstm1 = nnx.OptimizedLSTMCell(n_sensors, hidden_units_layer_1, rngs=rngs)
+        self.lstm2 = nnx.OptimizedLSTMCell(
+            hidden_units_layer_1, hidden_units_layer_2, rngs=rngs
         )
+        self.fc1 = nnx.Linear(hidden_units_layer_2, hidden_units_fc_1, rngs=rngs)
+        self.fc2 = nnx.Linear(hidden_units_fc_1, hidden_units_fc_2, rngs=rngs)
+        self.dropouts = _batch_shared_dropouts(dropout_rate, 2, rngs)
 
     def __call__(
         self, inputs: jax.Array, *, dropout_key: jax.Array | None = None
     ) -> jax.Array:
-        def key(index: int) -> jax.Array | None:
-            return (
-                None if dropout_key is None else jax.random.fold_in(dropout_key, index)
-            )
+        """Extract a fixed-size feature vector per windowed example.
 
-        def run(
-            cell: nnx.OptimizedLSTMCell, sequence: jax.Array, width: int
-        ) -> jax.Array:
+        Args:
+            inputs: Windowed sensor readings, shape ``(batch, window_length,
+                n_sensors)``.
+            dropout_key: Key the dropout masks are drawn from; `None` draws
+                them from the backbone's own streams.
+
+        Returns:
+            The second FC layer's features, shape ``(batch,
+            hidden_units_fc_2)``.
+        """
+
+        def run(cell: nnx.OptimizedLSTMCell, sequence: jax.Array) -> jax.Array:
             # Plain `lax.scan` from a zero (c, h): `nnx.RNN` (nnx.scan, and a
             # carry init drawing from stored rngs) fails under the pipeline's
             # MC-Dropout `jax.vmap`.
-            zero = jnp.zeros((sequence.shape[0], width))
+            zero = jnp.zeros((sequence.shape[0], cell.hidden_features))
             _, outputs = jax.lax.scan(
                 lambda carry, x: cell(carry, x),
                 (zero, zero),
                 jnp.swapaxes(sequence, 0, 1),
             )
-            return jnp.swapaxes(outputs, 0, 1)  # (B, W, width)
+            return jnp.swapaxes(outputs, 0, 1)  # (batch, window_length, width)
 
-        hidden = run(self.lstm1, inputs, 32)  # (B, W, 32)
-        hidden = self.dropouts[0](hidden, rngs=key(0))
-        hidden = run(self.lstm2, hidden, 64)[:, -1, :]  # (B, 64): last step only
-        hidden = self.dropouts[1](hidden, rngs=key(1))
+        hidden = run(self.lstm1, inputs)
+        hidden = self.dropouts[0](hidden, rngs=_dropout_key(dropout_key, 0))
+        hidden = run(self.lstm2, hidden)[:, -1, :]  # last step only
+        hidden = self.dropouts[1](hidden, rngs=_dropout_key(dropout_key, 1))
         hidden = nnx.relu(self.fc1(hidden))
-        return nnx.relu(self.fc2(hidden))  # (B, 8)
+        return nnx.relu(self.fc2(hidden))
 
 
-class Cnn1DMeanModel(nnx.Module):
-    """Deterministic point-RUL regressor over windowed CMAPSS sensor data."""
+class GammaCnnBackbone(nnx.Module):
+    """PROTOTYPE: Conv1D -> ReLU -> global average pooling, without dropout."""
 
     def __init__(
         self,
         n_sensors: int,
         *,
-        hidden_channels: int = 16,
+        hidden_channels: int = 4,
         kernel_size: int = 5,
-        dropout_rate: float = 0.0,
         rngs: nnx.Rngs,
     ) -> None:
-        """Initialize the convolutional backbone and the mean output head.
+        """Initialize the single convolutional layer.
 
         Args:
             n_sensors: Number of sensor channels in the windowed input.
-            hidden_channels: Number of channels produced by the
-                convolutional backbone.
+            hidden_channels: Number of output channels of the convolution.
             kernel_size: Convolution kernel width along the time axis.
-            dropout_rate: The backbone's dropout rate; 0 disables dropout.
-            rngs: NNX random-number generators used to initialize parameters
-                and, at a positive rate, the dropout masks' streams.
+            rngs: NNX random-number generators used to initialize parameters.
         """
-        self.backbone = LstmBackbone(
-            n_sensors,
-            hidden_channels=hidden_channels,
+        self.features = hidden_channels
+        self.conv = nnx.Conv(
+            in_features=n_sensors,
+            out_features=hidden_channels,
             kernel_size=kernel_size,
-            dropout_rate=dropout_rate,
+            padding="SAME",
             rngs=rngs,
         )
-        self.output = nnx.Linear(LSTM_FEATURES, 1, rngs=rngs)
+
+    def __call__(
+        self, inputs: jax.Array, *, dropout_key: jax.Array | None = None
+    ) -> jax.Array:
+        """Extract time-averaged convolutional features, shape ``(batch, features)``.
+
+        Args:
+            inputs: Windowed sensor readings, shape ``(batch, window_length,
+                n_sensors)``.
+            dropout_key: Ignored: the backbone has no dropout.
+
+        Returns:
+            Time-averaged convolutional features, shape ``(batch,
+            hidden_channels)``.
+        """
+        del dropout_key
+        return jnp.mean(nnx.relu(self.conv(inputs)), axis=1)
+
+
+class Cnn1DMeanModel(nnx.Module):
+    """Deterministic point-RUL regressor over windowed CMAPSS sensor data."""
+
+    def __init__(self, backbone: Backbone, *, rngs: nnx.Rngs) -> None:
+        """Wrap a backbone with the mean output head.
+
+        Args:
+            backbone: The feature extractor, e.g. a `Cnn1DBackbone` or an
+                `LstmBackbone`; its dropout rate is the model's.
+            rngs: NNX random-number generators used to initialize the head.
+        """
+        self.backbone = backbone
+        self.output = nnx.Linear(backbone.features, 1, rngs=rngs)
 
     def __call__(
         self, inputs: jax.Array, *, dropout_key: jax.Array | None = None
@@ -214,35 +286,20 @@ class Cnn1DMeanModel(nnx.Module):
 class Cnn1DGammaModel(nnx.Module):
     """Gamma residual regressor over windowed CMAPSS sensor data.
 
-    Independently initialized from ``Cnn1DMeanModel``, sharing only the
-    same backbone architecture family, and trained on Stage-1's squared
-    residuals through [`GammaVarianceStage`][stagereg.jax.GammaVarianceStage].
+    Independently initialized from ``Cnn1DMeanModel`` and trained on
+    Stage-1's squared residuals through
+    [`GammaVarianceStage`][stagereg.jax.GammaVarianceStage].
     """
 
-    def __init__(
-        self,
-        n_sensors: int,
-        *,
-        hidden_channels: int = 16,
-        kernel_size: int = 5,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Initialize the convolutional backbone and the Gamma output head.
+    def __init__(self, backbone: Backbone, *, rngs: nnx.Rngs) -> None:
+        """Wrap a backbone with the Gamma output head.
 
         Args:
-            n_sensors: Number of sensor channels in the windowed input.
-            hidden_channels: Number of channels produced by the
-                convolutional backbone.
-            kernel_size: Convolution kernel width along the time axis.
-            rngs: NNX random-number generators used to initialize parameters.
+            backbone: The feature extractor, e.g. a `GammaCnnBackbone`.
+            rngs: NNX random-number generators used to initialize the head.
         """
-        self.backbone = LstmBackbone(
-            n_sensors,
-            hidden_channels=hidden_channels,
-            kernel_size=kernel_size,
-            rngs=rngs,
-        )
-        self.head = GammaHead(LSTM_FEATURES, 1, rngs=rngs)
+        self.backbone = backbone
+        self.head = GammaHead(backbone.features, 1, rngs=rngs)
 
     def __call__(self, inputs: jax.Array) -> Gamma:
         """Predict a Gamma distribution over the squared RUL residual.
@@ -259,43 +316,23 @@ class Cnn1DGammaModel(nnx.Module):
 
 
 class Cnn1DGaussianModel(nnx.Module):
-    """Joint model: one 1D-CNN backbone predicting a Gaussian RUL distribution.
+    """Joint model: one backbone predicting a Gaussian RUL distribution.
 
-    The network of the joint MC-Dropout model: a single `Cnn1DBackbone`, with
-    the same architecture and hyperparameters as each staged model's
-    backbone, followed by a [`GaussianHead`][stagereg.jax.GaussianHead] that
-    predicts mean and scale together. Having one backbone rather than two,
-    it has roughly half the staged model's parameters.
+    The network of the joint MC-Dropout model: a single backbone followed by
+    a [`GaussianHead`][stagereg.jax.GaussianHead] that predicts mean and
+    scale together.
     """
 
-    def __init__(
-        self,
-        n_sensors: int,
-        *,
-        hidden_channels: int = 16,
-        kernel_size: int = 5,
-        dropout_rate: float = 0.0,
-        rngs: nnx.Rngs,
-    ) -> None:
-        """Initialize the convolutional backbone and the Gaussian output head.
+    def __init__(self, backbone: Backbone, *, rngs: nnx.Rngs) -> None:
+        """Wrap a backbone with the Gaussian output head.
 
         Args:
-            n_sensors: Number of sensor channels in the windowed input.
-            hidden_channels: Number of channels produced by the
-                convolutional backbone.
-            kernel_size: Convolution kernel width along the time axis.
-            dropout_rate: The backbone's dropout rate; 0 disables dropout.
-            rngs: NNX random-number generators used to initialize parameters
-                and, at a positive rate, the dropout masks' streams.
+            backbone: The feature extractor, e.g. a `Cnn1DBackbone` or an
+                `LstmBackbone`; its dropout rate is the model's.
+            rngs: NNX random-number generators used to initialize the head.
         """
-        self.backbone = LstmBackbone(
-            n_sensors,
-            hidden_channels=hidden_channels,
-            kernel_size=kernel_size,
-            dropout_rate=dropout_rate,
-            rngs=rngs,
-        )
-        self.head = GaussianHead(LSTM_FEATURES, 1, rngs=rngs)
+        self.backbone = backbone
+        self.head = GaussianHead(backbone.features, 1, rngs=rngs)
 
     def __call__(
         self, inputs: jax.Array, *, dropout_key: jax.Array | None = None

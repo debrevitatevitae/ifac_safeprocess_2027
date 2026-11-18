@@ -30,7 +30,9 @@ def test_staged_mcd_pipeline_and_evaluate_test_metrics_end_to_end(
     train_windows, train_targets = synthetic_windows(rng, 64)
     validation_windows, validation_targets = synthetic_windows(rng, 16)
     test_windows, test_rul = synthetic_windows(rng, 10)
-    config = dataclasses.replace(tiny_cmapss_config, dropout_rate=0.2, num_draws=8)
+    config = dataclasses.replace(
+        cmapss_pipeline.with_dropout_rate(tiny_cmapss_config, 0.2), num_draws=8
+    )
 
     _, state = cmapss_pipeline.train_mean_model(
         train_windows,
@@ -39,7 +41,6 @@ def test_staged_mcd_pipeline_and_evaluate_test_metrics_end_to_end(
         validation_targets,
         config,
         event_sinks=(),
-        dropout_rate=config.dropout_rate,
     )
     cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
@@ -97,7 +98,6 @@ def test_training_functions_report_only_to_the_event_sinks_they_are_given(
         validation_targets,
         config,
         event_sinks=[mean_sink],
-        dropout_rate=0.0,
     )
     cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=[gamma_sink]
@@ -211,13 +211,13 @@ def test_cmapss_config_rejects_non_positive_joint_epochs(
         cmapss_pipeline.CmapssConfig(joint_epochs=joint_epochs)
 
 
-def test_cmapss_config_gives_the_joint_model_the_same_default_budget_as_each_stage(
+def test_cmapss_config_gives_the_joint_model_the_same_default_budget_as_the_mean(
     cmapss_pipeline: ModuleType,
 ) -> None:
     config = cmapss_pipeline.CmapssConfig()
 
-    assert config.mean_epochs == config.variance_epochs == 100
-    assert config.joint_epochs == 100
+    assert config.mean_epochs == config.joint_epochs == 50
+    assert config.variance_epochs == 25
 
 
 def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
@@ -250,30 +250,72 @@ def test_cmapss_config_accepts_the_mc_dropout_defaults(
 ) -> None:
     config = cmapss_pipeline.CmapssConfig()
 
-    assert config.dropout_rate == 0.5
-    assert config.num_draws == 1000
+    assert config.joint_net_config == cmapss_pipeline.MeanLSTMConfig()
+    assert config.mean_net_config == cmapss_pipeline.MeanLSTMConfig()
+    assert config.mean_net_config.dropout_rate == 0.3
+    assert config.num_draws == 100
 
 
+_MEAN_NET_CONFIGS = ("MeanCNNConfig", "MeanLSTMConfig")
+"""The network configurations of the MC-Dropout (mean and joint) networks."""
+
+
+@pytest.mark.parametrize("net_config", _MEAN_NET_CONFIGS)
 @given(dropout_rate=st.floats(min_value=0.0, max_value=0.999))
-def test_cmapss_config_accepts_a_dropout_rate_in_the_unit_interval(
-    cmapss_pipeline: ModuleType, dropout_rate: float
+def test_mean_net_configs_accept_a_dropout_rate_in_the_unit_interval(
+    cmapss_pipeline: ModuleType, net_config: str, dropout_rate: float
 ) -> None:
-    assert cmapss_pipeline.CmapssConfig(dropout_rate=dropout_rate).dropout_rate == (
-        dropout_rate
-    )
+    config_type = getattr(cmapss_pipeline, net_config)
+
+    assert config_type(dropout_rate=dropout_rate).dropout_rate == dropout_rate
 
 
+@pytest.mark.parametrize("net_config", _MEAN_NET_CONFIGS)
 @given(
     dropout_rate=st.one_of(
         st.floats(max_value=0.0, exclude_max=True, allow_nan=False),
         st.floats(min_value=1.0, allow_nan=False),
     )
 )
-def test_cmapss_config_rejects_a_dropout_rate_outside_the_unit_interval(
-    cmapss_pipeline: ModuleType, dropout_rate: float
+def test_mean_net_configs_reject_a_dropout_rate_outside_the_unit_interval(
+    cmapss_pipeline: ModuleType, net_config: str, dropout_rate: float
 ) -> None:
     with pytest.raises(ValueError, match="dropout_rate"):
-        cmapss_pipeline.CmapssConfig(dropout_rate=dropout_rate)
+        getattr(cmapss_pipeline, net_config)(dropout_rate=dropout_rate)
+
+
+@pytest.mark.parametrize(
+    ("net_config", "size"),
+    [
+        ("MeanCNNConfig", "kernel_size"),
+        ("MeanCNNConfig", "hidden_units"),
+        ("MeanLSTMConfig", "hidden_units_layer_1"),
+        ("MeanLSTMConfig", "hidden_units_layer_2"),
+        ("MeanLSTMConfig", "hidden_units_fc_1"),
+        ("MeanLSTMConfig", "hidden_units_fc_2"),
+        ("GammaCNNConfig", "kernel_size"),
+        ("GammaCNNConfig", "hidden_units"),
+    ],
+)
+def test_net_configs_reject_non_positive_sizes(
+    cmapss_pipeline: ModuleType, net_config: str, size: str
+) -> None:
+    with pytest.raises(ValueError, match=size):
+        getattr(cmapss_pipeline, net_config)(**{size: 0})
+
+
+def test_with_dropout_rate_sets_both_mc_dropout_networks(
+    cmapss_pipeline: ModuleType,
+) -> None:
+    config = cmapss_pipeline.CmapssConfig(
+        joint_net_config=cmapss_pipeline.MeanCNNConfig()
+    )
+
+    updated = cmapss_pipeline.with_dropout_rate(config, 0.1)
+
+    assert updated.joint_net_config == cmapss_pipeline.MeanCNNConfig(dropout_rate=0.1)
+    assert updated.mean_net_config == cmapss_pipeline.MeanLSTMConfig(dropout_rate=0.1)
+    assert updated.gamma_net_config == config.gamma_net_config
 
 
 @given(num_draws=st.integers(max_value=0))
@@ -289,16 +331,12 @@ def test_cmapss_config_gives_the_gamma_model_a_narrow_weight_decayed_default(
 ) -> None:
     config = cmapss_pipeline.CmapssConfig()
 
-    assert config.gamma_hidden_channels < config.hidden_channels
+    assert config.gamma_net_config == cmapss_pipeline.GammaCNNConfig()
+    assert (
+        config.gamma_net_config.hidden_units
+        < cmapss_pipeline.MeanCNNConfig().hidden_units
+    )
     assert config.gamma_weight_decay > 0.0
-
-
-@given(channels=st.integers(max_value=0))
-def test_cmapss_config_rejects_non_positive_gamma_hidden_channels(
-    cmapss_pipeline: ModuleType, channels: int
-) -> None:
-    with pytest.raises(ValueError, match="gamma_hidden_channels"):
-        cmapss_pipeline.CmapssConfig(gamma_hidden_channels=channels)
 
 
 @given(weight_decay=st.floats(max_value=0.0, exclude_max=True, allow_nan=False))
@@ -324,26 +362,27 @@ def _train_gamma(
         validation_targets,
         config,
         event_sinks=(),
-        dropout_rate=0.0,
     )
     return cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()
     )
 
 
-def test_train_gamma_model_is_gamma_hidden_channels_wide(
+def test_train_gamma_model_follows_the_gamma_net_config(
     cmapss_pipeline: ModuleType,
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
     from ifac_safeprocess_2027.cmapss.model import Cnn1DGammaModel
 
-    config = dataclasses.replace(tiny_cmapss_config, gamma_hidden_channels=3)
+    gamma_net_config = cmapss_pipeline.GammaCNNConfig(kernel_size=2, hidden_units=3)
+    config = dataclasses.replace(tiny_cmapss_config, gamma_net_config=gamma_net_config)
 
     trained = _train_gamma(cmapss_pipeline, config, synthetic_windows)
 
+    rngs = nnx.Rngs(0)
     reference = Cnn1DGammaModel(
-        3, hidden_channels=3, kernel_size=config.kernel_size, rngs=nnx.Rngs(0)
+        cmapss_pipeline.build_backbone(3, gamma_net_config, rngs=rngs), rngs=rngs
     )
     shapes = jax.tree.map(jnp.shape, nnx.state(trained, nnx.Param))
     assert shapes == jax.tree.map(jnp.shape, nnx.state(reference, nnx.Param))
@@ -370,7 +409,9 @@ def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
-    config = dataclasses.replace(tiny_cmapss_config, dropout_rate=0.2, num_draws=8)
+    config = dataclasses.replace(
+        cmapss_pipeline.with_dropout_rate(tiny_cmapss_config, 0.2), num_draws=8
+    )
     rng = np.random.default_rng(5)
     train_windows, train_targets = synthetic_windows(rng, 32)
     validation_windows, validation_targets = synthetic_windows(rng, 8)
@@ -381,7 +422,6 @@ def test_staged_mcd_posterior_stage_does_not_train_the_mean_network(
         validation_targets,
         config,
         event_sinks=(),
-        dropout_rate=config.dropout_rate,
     )
     cmapss_pipeline.train_gamma_model(
         state, train_windows, train_targets, config, event_sinks=()

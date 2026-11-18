@@ -38,6 +38,7 @@ from ifac_safeprocess_2027.cmapss.pipeline import (
     CyclesPredictive,
     ProxyVarianceNLL,
     prepare_cmapss_windows,
+    with_dropout_rate,
 )
 from ifac_safeprocess_2027.cmapss.preprocessing import (
     fit_proxy_variance_schedule,
@@ -66,8 +67,7 @@ def run_one(seed_config: CmapssConfig, p: float) -> dict[str, dict[str, float]]:
         epsilon_cycles=seed_config.proxy_variance_epsilon_cycles,
     )
     p_config = dataclasses.replace(
-        seed_config,
-        dropout_rate=p,
+        with_dropout_rate(seed_config, p),
         num_draws=1 if p == 0.0 else seed_config.num_draws,
     )
     trained = {

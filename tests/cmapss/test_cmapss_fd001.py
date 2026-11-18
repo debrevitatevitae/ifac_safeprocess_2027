@@ -35,7 +35,9 @@ def mcd_config(tiny_cmapss_config: Any) -> Any:
     """The tiny configuration with eight-draw MC-Dropout models."""
     import dataclasses
 
-    return dataclasses.replace(tiny_cmapss_config, dropout_rate=0.2, num_draws=8)
+    from ifac_safeprocess_2027.cmapss.pipeline import with_dropout_rate
+
+    return dataclasses.replace(with_dropout_rate(tiny_cmapss_config, 0.2), num_draws=8)
 
 
 def _always(prepared: Any) -> Callable[[Any], Any]:
@@ -213,13 +215,13 @@ def test_mcd_models_without_dropout_collapse_to_a_single_draw(
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
-    import dataclasses
-
     import numpy as np
 
     # Without dropout every mask set is the identity, so every draw, and every
     # draw's aleatoric variance, is the same.
-    config = dataclasses.replace(mcd_config, dropout_rate=0.0)
+    from ifac_safeprocess_2027.cmapss.pipeline import with_dropout_rate
+
+    config = with_dropout_rate(mcd_config, 0.0)
     prepared = synthetic_prepared_data()
 
     (result,) = cmapss_fd001.compare_models(config, seeds=1, prepare=_always(prepared))

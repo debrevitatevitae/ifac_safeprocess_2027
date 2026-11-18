@@ -119,11 +119,11 @@ def tiny_cmapss_config(cmapss_pipeline: ModuleType) -> Any:
     return cmapss_pipeline.CmapssConfig(
         window_length=10,
         batch_size=16,
-        hidden_channels=2,
-        kernel_size=3,
+        joint_net_config=cmapss_pipeline.MeanCNNConfig(kernel_size=3, hidden_units=2),
+        mean_net_config=cmapss_pipeline.MeanLSTMConfig(2, 2, 2, 2),
+        gamma_net_config=cmapss_pipeline.GammaCNNConfig(kernel_size=3, hidden_units=2),
         mean_epochs=2,
         variance_epochs=2,
-        gamma_hidden_channels=2,
         joint_epochs=2,
         seed=3,
     )

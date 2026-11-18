@@ -81,7 +81,6 @@ def train_joint_model(
     *,
     epochs: int,
     event_sinks: Sequence[EventSink],
-    dropout_rate: float,
 ) -> Cnn1DGaussianModel:
     """Train a joint model with `run_supervised` on the Gaussian NLL.
 
@@ -98,7 +97,6 @@ def train_joint_model(
         epochs: Number of training epochs.
         event_sinks: Sinks notified of the training events; pass none to
             train silently.
-        dropout_rate: The network's dropout rate, active during training.
 
     Returns:
         The trained `Cnn1DGaussianModel`.
@@ -113,7 +111,7 @@ def train_joint_model(
         windows,
         targets,
         config,
-        dropout_rate=dropout_rate,
+        net_config=config.joint_net_config,
     )
     run_supervised(
         model=setup.model,
@@ -221,7 +219,8 @@ def _train_joint_mcd(prepared: PreparedCmapssData, config: CmapssConfig) -> nnx.
             sets its training masks and the predictive's draws.
 
     Returns:
-        The joint model trained at `config.dropout_rate`, wrapped by
+        The joint model, `config.joint_net_config` trained with its dropout,
+        wrapped by
         `build_mc_dropout_predictive`.
     """
     network = train_joint_model(
@@ -229,7 +228,6 @@ def _train_joint_mcd(prepared: PreparedCmapssData, config: CmapssConfig) -> nnx.
         config,
         epochs=config.joint_epochs,
         event_sinks=(),
-        dropout_rate=config.dropout_rate,
     )
     return build_mc_dropout_predictive(network, config)
 
@@ -242,9 +240,9 @@ def _train_staged_mcd(
 ) -> nnx.Module:
     """Silently train the staged MC-Dropout model and return its predictive.
 
-    Trains the mean stage at `config.dropout_rate` on the train split, the
-    validation split monitoring it, and the Gamma stage on its held-out
-    residuals on the validation split. It then runs the inference-only
+    Trains the mean stage, with `config.mean_net_config`'s dropout, on the
+    train split, the validation split monitoring it, and the Gamma stage on
+    its held-out residuals on the validation split. It then runs the inference-only
     posterior stage and re-fits the Gamma network to the posterior
     predictive's mean, again on its held-out residuals.
 
@@ -265,7 +263,6 @@ def _train_staged_mcd(
         prepared.validation_targets,
         config,
         event_sinks=(),
-        dropout_rate=config.dropout_rate,
         objective=objective,
     )
     train_gamma_model(

@@ -4,8 +4,9 @@ Loads the FD001 training and test splits and builds standardized sliding
 windows and standardized RUL targets (`prepare_cmapss_windows`). Trains the
 staged pipeline through `stagereg`'s explicit supervised stages:
 
-* `train_mean_model` trains a 1D-CNN mean model via `MeanStage`, optionally
-  with dropout and under a proxy-variance objective (`ProxyVarianceNLL`).
+* `train_mean_model` trains a 1D-CNN or LSTM mean model via `MeanStage`,
+  optionally with dropout and under a proxy-variance objective
+  (`ProxyVarianceNLL`).
 * `train_gamma_model` trains an independently-initialized 1D-CNN Gamma
   model on the mean model's squared residuals via `GammaVarianceStage`.
 * `build_staged_mcd_posterior` runs an inference-only MC-Dropout posterior
@@ -26,7 +27,7 @@ ground-truth RUL from `RUL_FD001.txt`.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import jax
 import jax.numpy as jnp
@@ -67,7 +68,15 @@ from .data import (
     load_fd001_test_data,
     load_fd001_test_rul,
 )
-from .model import Cnn1DGammaModel, Cnn1DGaussianModel, Cnn1DMeanModel
+from .model import (
+    Backbone,
+    Cnn1DBackbone,
+    Cnn1DGammaModel,
+    Cnn1DGaussianModel,
+    Cnn1DMeanModel,
+    GammaCnnBackbone,
+    LstmBackbone,
+)
 from .preprocessing import (
     ProxyVarianceSchedule,
     SensorStandardization,
@@ -90,6 +99,113 @@ TEST_METRICS: tuple[EpochMetric, ...] = (
 """The default test metrics: RMSE, 95% coverage and closed-form CRPS."""
 
 
+def _require_positive(**sizes: int) -> None:
+    """Raise if any of the named sizes is not positive."""
+    for name, size in sizes.items():
+        if size <= 0:
+            raise ValueError(f"{name} must be positive.")
+
+
+def _require_dropout_rate(dropout_rate: float) -> None:
+    """Raise if `dropout_rate` is not in `[0, 1)`."""
+    if not 0.0 <= dropout_rate < 1.0:
+        raise ValueError("dropout_rate must be within [0, 1).")
+
+
+@dataclass(frozen=True)
+class MeanLSTMConfig:
+    """An LSTM mean or joint network (see `LstmBackbone`).
+
+    In -> LSTM(layer 1, whole sequence) -> dropout -> LSTM(layer 2, last step)
+    -> dropout -> FC(fc 1) -> FC(fc 2) -> Out.
+
+    Attributes:
+        hidden_units_layer_1: Width of the first LSTM.
+        hidden_units_layer_2: Width of the second LSTM.
+        hidden_units_fc_1: Width of the first FC layer.
+        hidden_units_fc_2: Width of the second FC layer, which feeds the head.
+        dropout_rate: Dropout rate, in `[0, 1)`, after each LSTM, active in
+            training and in the MC-Dropout prediction. Dropout is the
+            network's only regularizer.
+    """
+
+    hidden_units_layer_1: int = 32
+    hidden_units_layer_2: int = 64
+    hidden_units_fc_1: int = 8
+    hidden_units_fc_2: int = 8
+    dropout_rate: float = 0.3
+
+    def __post_init__(self) -> None:
+        """Validate the widths and the dropout rate.
+
+        Raises:
+            ValueError: If a width is not positive or the dropout rate is not
+                in [0, 1).
+        """
+        _require_positive(
+            hidden_units_layer_1=self.hidden_units_layer_1,
+            hidden_units_layer_2=self.hidden_units_layer_2,
+            hidden_units_fc_1=self.hidden_units_fc_1,
+            hidden_units_fc_2=self.hidden_units_fc_2,
+        )
+        _require_dropout_rate(self.dropout_rate)
+
+
+@dataclass(frozen=True)
+class MeanCNNConfig:
+    """A 1D-CNN mean or joint network (see `Cnn1DBackbone`).
+
+    In -> Conv1D -> ReLU -> dropout -> Conv1D -> ReLU -> dropout -> GAP -> Out.
+
+    Attributes:
+        kernel_size: Convolution kernel width along the time axis.
+        hidden_units: Channel width of both convolutional layers.
+        dropout_rate: Dropout rate, in `[0, 1)`, after each convolutional
+            layer, active in training and in the MC-Dropout prediction.
+            Dropout is the network's only regularizer.
+    """
+
+    kernel_size: int = 5
+    hidden_units: int = 16
+    dropout_rate: float = 0.3
+
+    def __post_init__(self) -> None:
+        """Validate the sizes and the dropout rate.
+
+        Raises:
+            ValueError: If a size is not positive or the dropout rate is not
+                in [0, 1).
+        """
+        _require_positive(kernel_size=self.kernel_size, hidden_units=self.hidden_units)
+        _require_dropout_rate(self.dropout_rate)
+
+
+@dataclass(frozen=True)
+class GammaCNNConfig:
+    """In -> Conv1D -> ReLU -> GAP -> Out.
+
+    The Gamma network (see `GammaCnnBackbone`). It has no dropout. It is kept
+    narrow because it fits the held-out residuals of only the ~30 validation
+    units, with no further validation set to stop it from overfitting them.
+
+    Attributes:
+        kernel_size: Convolution kernel width along the time axis.
+        hidden_units: Channel width of the convolutional layer.
+    """
+
+    kernel_size: int = 5
+    hidden_units: int = 4
+    # dropout is zero
+
+    def __post_init__(self) -> None:
+        """Validate the sizes.
+
+        Raises:
+            ValueError: If a size is not positive.
+        """
+        _require_positive(kernel_size=self.kernel_size, hidden_units=self.hidden_units)
+
+
 @dataclass(frozen=True)
 class CmapssConfig:
     """Configuration for the CMAPSS FD001 MC-Dropout models.
@@ -100,26 +216,21 @@ class CmapssConfig:
             validation, grouped by whole unit ID. The staged models' Gamma
             stage fits the held-out residuals on these units.
         batch_size: Number of windows per mini-batch.
-        hidden_channels: Convolutional channel width of the mean and joint
-            networks.
-        kernel_size: Convolution kernel width along the time axis.
-        learning_rate: Adam learning rate for both stages.
-        mean_epochs: Number of Stage-1 mean-model training epochs.
-        variance_epochs: Number of Stage-2 Gamma-model training epochs.
-        gamma_hidden_channels: Convolutional channel width of the Gamma
-            model, kept below `hidden_channels` because it fits the
-            held-out residuals of only the ~30 validation units, with no
-            further validation set to stop it from overfitting them.
+        joint_net_config: Architecture and dropout rate of the joint
+            MC-Dropout network.
+        mean_net_config: Architecture and dropout rate of the staged
+            MC-Dropout models' mean network.
+        gamma_net_config: Architecture of the staged models' Gamma network.
         gamma_weight_decay: AdamW decoupled weight decay of the Gamma
             model's training, which shrinks it toward a constant variance:
             with no validation set for the Gamma stage, it is that stage's
             only regularization.
+        learning_rate: Adam learning rate of every network.
         joint_epochs: Number of training epochs of the joint MC-Dropout
             model.
-        dropout_rate: Dropout rate, in `[0, 1)`, of the MC-Dropout models'
-            backbones: the joint MC-Dropout network and the staged
-            MC-Dropout model's mean network, both trained and predicted with
-            dropout active. Dropout is their only regularizer.
+        mean_epochs: Number of Stage-1 mean-model training epochs.
+        variance_epochs: Number of Stage-2 Gamma-model training epochs, for
+            both the Gamma stage and its re-fit to the posterior mean.
         num_draws: Number of dropout-mask sets an MC-Dropout model's posterior
             predictive mixes.
         proxy_variance_prognosability: Prognosability, in `[0, 1]`, setting
@@ -136,16 +247,15 @@ class CmapssConfig:
     window_length: int = 30
     validation_fraction: float = 0.3
     batch_size: int = 32
-    hidden_channels: int = 16
-    kernel_size: int = 5
-    learning_rate: float = 1e-3
-    mean_epochs: int = 100
-    variance_epochs: int = 100
-    gamma_hidden_channels: int = 8
+    joint_net_config: MeanCNNConfig | MeanLSTMConfig = MeanLSTMConfig()
+    mean_net_config: MeanCNNConfig | MeanLSTMConfig = MeanLSTMConfig()
+    gamma_net_config: GammaCNNConfig = GammaCNNConfig()
     gamma_weight_decay: float = 0.1
-    joint_epochs: int = 100
-    dropout_rate: float = 0.5
-    num_draws: int = 1000
+    learning_rate: float = 1e-3
+    joint_epochs: int = 50
+    mean_epochs: int = 50
+    variance_epochs: int = 25
+    num_draws: int = 100
     proxy_variance_prognosability: float = 0.87
     proxy_variance_epsilon_cycles: float = 1e-6
     seed: int = 0
@@ -153,19 +263,16 @@ class CmapssConfig:
     def __post_init__(self) -> None:
         """Validate size, fraction, epoch, and MC-Dropout configuration.
 
+        The network configurations validate themselves.
+
         Raises:
             ValueError: If sizes, epochs or draws are not positive, the
                 Gamma weight decay is negative, the validation fraction is
-                not in (0, 1), the dropout rate is not in [0, 1), the
-                proxy-variance prognosability is not in [0, 1], or its
-                epsilon is not positive.
+                not in (0, 1), the proxy-variance prognosability is not in
+                [0, 1], or its epsilon is not positive.
         """
         if self.window_length <= 0 or self.batch_size <= 0:
             raise ValueError("window_length and batch_size must be positive.")
-        if self.hidden_channels <= 0 or self.kernel_size <= 0:
-            raise ValueError("hidden_channels and kernel_size must be positive.")
-        if self.gamma_hidden_channels <= 0:
-            raise ValueError("gamma_hidden_channels must be positive.")
         if not self.gamma_weight_decay >= 0.0:
             raise ValueError("gamma_weight_decay must be non-negative.")
         if self.mean_epochs <= 0 or self.variance_epochs <= 0:
@@ -174,14 +281,77 @@ class CmapssConfig:
             raise ValueError("joint_epochs must be positive.")
         if not 0.0 < self.validation_fraction < 1.0:
             raise ValueError("validation_fraction must be within (0, 1).")
-        if not 0.0 <= self.dropout_rate < 1.0:
-            raise ValueError("dropout_rate must be within [0, 1).")
         if self.num_draws <= 0:
             raise ValueError("num_draws must be positive.")
         if not 0.0 <= self.proxy_variance_prognosability <= 1.0:
             raise ValueError("proxy_variance_prognosability must be within [0, 1].")
         if not self.proxy_variance_epsilon_cycles > 0.0:
             raise ValueError("proxy_variance_epsilon_cycles must be positive.")
+
+
+def with_dropout_rate(config: CmapssConfig, dropout_rate: float) -> CmapssConfig:
+    """Return `config` with the joint and mean networks at `dropout_rate`.
+
+    Args:
+        config: The configuration to copy.
+        dropout_rate: The new dropout rate, in `[0, 1)`, of both MC-Dropout
+            networks.
+
+    Returns:
+        A copy of `config` whose `joint_net_config` and `mean_net_config`
+        have `dropout_rate`; everything else is unchanged.
+    """
+    return replace(
+        config,
+        joint_net_config=replace(config.joint_net_config, dropout_rate=dropout_rate),
+        mean_net_config=replace(config.mean_net_config, dropout_rate=dropout_rate),
+    )
+
+
+def build_backbone(
+    n_sensors: int,
+    net_config: MeanCNNConfig | MeanLSTMConfig | GammaCNNConfig,
+    *,
+    rngs: nnx.Rngs,
+) -> Backbone:
+    """Build the backbone a network configuration describes.
+
+    Args:
+        n_sensors: Number of sensor channels in the windowed input.
+        net_config: The network's configuration.
+        rngs: NNX random-number generators used to initialize parameters
+            and, at a positive dropout rate, the dropout masks' streams.
+
+    Returns:
+        A `Cnn1DBackbone`, `LstmBackbone` or `GammaCnnBackbone`.
+    """
+    match net_config:
+        case MeanCNNConfig():
+            return Cnn1DBackbone(
+                n_sensors,
+                hidden_channels=net_config.hidden_units,
+                kernel_size=net_config.kernel_size,
+                dropout_rate=net_config.dropout_rate,
+                rngs=rngs,
+            )
+        case MeanLSTMConfig():
+            return LstmBackbone(
+                n_sensors,
+                hidden_units_layer_1=net_config.hidden_units_layer_1,
+                hidden_units_layer_2=net_config.hidden_units_layer_2,
+                hidden_units_fc_1=net_config.hidden_units_fc_1,
+                hidden_units_fc_2=net_config.hidden_units_fc_2,
+                dropout_rate=net_config.dropout_rate,
+                rngs=rngs,
+            )
+        case GammaCNNConfig():
+            return GammaCnnBackbone(
+                n_sensors,
+                hidden_channels=net_config.hidden_units,
+                kernel_size=net_config.kernel_size,
+                rngs=rngs,
+            )
+    raise TypeError(f"Unknown network configuration: {net_config!r}.")
 
 
 def make_window_loader(
@@ -220,7 +390,7 @@ def make_window_loader(
 
 @dataclass(frozen=True)
 class SupervisedTrainingSetup[ModelT: nnx.Module]:
-    """A freshly initialized CNN model and what supervised training needs for it.
+    """A freshly initialized model and what supervised training needs for it.
 
     Attributes:
         model: The freshly initialized model.
@@ -246,39 +416,35 @@ def build_supervised_training_setup[ModelT: nnx.Module](
     validation_targets: np.ndarray,
     config: CmapssConfig,
     *,
-    dropout_rate: float,
+    net_config: MeanCNNConfig | MeanLSTMConfig,
 ) -> SupervisedTrainingSetup[ModelT]:
-    """Initialize a 1D-CNN model and its optimizer and loaders from `config`.
+    """Initialize a model and its optimizer and loaders from `config`.
 
     The key `config.seed` is split into the model's initialization key and
-    the training key. The model is built with the configured channel width
-    and kernel size, and optimized with Adam at the configured learning rate.
+    the training key. The model's backbone is built from `net_config`, and
+    the model is optimized with Adam at the configured learning rate.
     Dropout adds no parameters, so the initial parameters do not depend on
-    `dropout_rate`.
+    the dropout rate.
 
     Args:
-        model_type: The model class, constructed as `model_type(n_sensors, *,
-            hidden_channels, kernel_size, dropout_rate, rngs)`.
+        model_type: The model class, constructed as `model_type(backbone, *,
+            rngs)`.
         train_windows: Training sliding windows, shape `(n_train,
             window_length, n_sensors)`.
         train_targets: Training RUL targets, shape `(n_train,)`.
         validation_windows: Held-out validation windows, same layout as
             `train_windows`.
         validation_targets: Held-out validation RUL targets.
-        config: Example configuration controlling model size and training.
-        dropout_rate: The model's dropout rate; 0 disables dropout.
+        config: Example configuration controlling training.
+        net_config: The network's architecture and dropout rate.
 
     Returns:
         The model, its optimizer, the training key, and both loaders.
     """
     model_key, rng_key = jax.random.split(jax.random.key(config.seed))
-    model = model_type(
-        train_windows.shape[-1],
-        hidden_channels=config.hidden_channels,
-        kernel_size=config.kernel_size,
-        dropout_rate=dropout_rate,
-        rngs=nnx.Rngs(model_key),
-    )
+    rngs = nnx.Rngs(model_key)
+    backbone = build_backbone(train_windows.shape[-1], net_config, rngs=rngs)
+    model = model_type(backbone, rngs=rngs)
     return SupervisedTrainingSetup(
         model=model,
         optimizer=create_optimizer(model, optax.adam(config.learning_rate)),
@@ -343,10 +509,11 @@ def train_mean_model(
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
-    dropout_rate: float,
     objective: PredictionLoss | None = None,
 ) -> tuple[Cnn1DMeanModel, TrainingState]:
-    """Train a 1D-CNN mean model through `MeanStage` on windowed RUL data.
+    """Train a mean model through `MeanStage` on windowed RUL data.
+
+    The network is `config.mean_net_config`, trained with its dropout active.
 
     Args:
         train_windows: Training sliding windows, shape `(n_train,
@@ -358,8 +525,6 @@ def train_mean_model(
         config: Example configuration controlling model size and training.
         event_sinks: Sinks notified of the stage's training events; pass
             none to train silently.
-        dropout_rate: The mean network's dropout rate, active during
-            training.
         objective: The per-window objective the mean is trained and
             validated on; `None`, the default, is `SquaredErrorLoss`.
 
@@ -374,7 +539,7 @@ def train_mean_model(
         validation_windows,
         validation_targets,
         config,
-        dropout_rate=dropout_rate,
+        net_config=config.mean_net_config,
     )
     loss = make_supervised_loss(SquaredErrorLoss() if objective is None else objective)
     stage = MeanStage(
@@ -412,10 +577,10 @@ def train_gamma_model(
     residuals on the windows given, per `GammaVarianceStage`'s contract.
     Pass held-out windows the mean never trained on: in-sample residuals
     understate the held-out error, so a variance fit to them is too small.
-    The network is `config.gamma_hidden_channels` wide and trained with
-    AdamW at `config.gamma_weight_decay`: the held-out units are few, and
-    with no validation set for this stage, a full-width, unregularized Gamma
-    network overfits them into a spiky variance.
+    The network is the narrow `config.gamma_net_config`, trained with AdamW
+    at `config.gamma_weight_decay`: the held-out units are few, and with no
+    validation set for this stage, a full-width, unregularized Gamma network
+    overfits them into a spiky variance.
 
     Args:
         state: The `MEAN_READY` staged training state produced by
@@ -432,13 +597,9 @@ def train_gamma_model(
         The trained `Cnn1DGammaModel`.
     """
     n_sensors = windows.shape[-1]
-    model_key = seed_stream_key(config, GAMMA_NETWORK_STREAM)
-    model = Cnn1DGammaModel(
-        n_sensors,
-        hidden_channels=config.gamma_hidden_channels,
-        kernel_size=config.kernel_size,
-        rngs=nnx.Rngs(model_key),
-    )
+    rngs = nnx.Rngs(seed_stream_key(config, GAMMA_NETWORK_STREAM))
+    backbone = build_backbone(n_sensors, config.gamma_net_config, rngs=rngs)
+    model = Cnn1DGammaModel(backbone, rngs=rngs)
     optimizer = create_optimizer(
         model,
         optax.adamw(config.learning_rate, weight_decay=config.gamma_weight_decay),
@@ -628,13 +789,14 @@ def build_staged_mcd_posterior(
     so it runs one, which only evaluates the training loss; with no updates
     neither its prior nor validation nor early stopping has any effect, and
     none is configured. The posterior is the trained mean network, rebuilt
-    at `config.dropout_rate`, under random dropout masks, sharing the Gamma
-    stage's aleatoric variance.
+    from `config.mean_net_config` with its dropout rate, under random dropout
+    masks, sharing the Gamma stage's aleatoric variance.
 
     Args:
         state: The `VARIANCE_READY` staged training state produced by
-            `train_gamma_model`, after a mean stage trained with dropout at
-            `config.dropout_rate`. It moves on to `POSTERIOR_READY`.
+            `train_gamma_model`, after a mean stage trained with
+            `config.mean_net_config`'s dropout. It moves on to
+            `POSTERIOR_READY`.
         train_windows: Training sliding windows, shape `(n_train,
             window_length, n_sensors)`.
         train_targets: Training RUL targets, shape `(n_train,)`.
@@ -646,13 +808,11 @@ def build_staged_mcd_posterior(
     Returns:
         The stage's posterior predictive under `mc_dropout_draw_key`.
     """
-    network = Cnn1DMeanModel(
-        train_windows.shape[-1],
-        hidden_channels=config.hidden_channels,
-        kernel_size=config.kernel_size,
-        dropout_rate=config.dropout_rate,
-        rngs=nnx.Rngs(seed_stream_key(config, POSTERIOR_NETWORK_STREAM)),
+    rngs = nnx.Rngs(seed_stream_key(config, POSTERIOR_NETWORK_STREAM))
+    backbone = build_backbone(
+        train_windows.shape[-1], config.mean_net_config, rngs=rngs
     )
+    network = Cnn1DMeanModel(backbone, rngs=rngs)
     stage = PosteriorStage(
         inference_method=MCDropout(optimizer=optax.set_to_zero()),
         train_loader=make_window_loader(
