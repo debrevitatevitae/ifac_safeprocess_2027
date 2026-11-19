@@ -7,8 +7,8 @@ staged pipeline through `stagereg`'s explicit supervised stages:
 * `train_mean_model` trains a 1D-CNN or LSTM mean model via `MeanStage`,
   optionally with dropout and under a proxy-variance objective
   (`ProxyVarianceNLL`).
-* `train_gamma_model` trains an independently-initialized 1D-CNN Gamma
-  model on the mean model's squared residuals via `GammaVarianceStage`.
+* `train_gamma_model` trains an independently-initialized Gamma model,
+  on a small 1D-CNN backbone, on the mean model's squared residuals via `GammaVarianceStage`.
 * `build_staged_mcd_posterior` runs an inference-only MC-Dropout posterior
   stage, and `refit_gamma_to_posterior_mean` re-fits the Gamma network to
   the posterior predictive's mean.
@@ -71,9 +71,9 @@ from .data import (
 from .model import (
     Backbone,
     Cnn1DBackbone,
-    Cnn1DGammaModel,
-    Cnn1DGaussianModel,
-    Cnn1DMeanModel,
+    GammaModel,
+    GaussianModel,
+    MeanModel,
     GammaCnnBackbone,
     LstmBackbone,
 )
@@ -510,7 +510,7 @@ def train_mean_model(
     *,
     event_sinks: Sequence[EventSink],
     objective: PredictionLoss | None = None,
-) -> tuple[Cnn1DMeanModel, TrainingState]:
+) -> tuple[MeanModel, TrainingState]:
     """Train a mean model through `MeanStage` on windowed RUL data.
 
     The network is `config.mean_net_config`, trained with its dropout active.
@@ -529,11 +529,11 @@ def train_mean_model(
             validated on; `None`, the default, is `SquaredErrorLoss`.
 
     Returns:
-        A tuple of the trained `Cnn1DMeanModel` and the shared staged
+        A tuple of the trained `MeanModel` and the shared staged
         `TrainingState`, ready for Stage 2 to continue on.
     """
     setup = build_supervised_training_setup(
-        Cnn1DMeanModel,
+        MeanModel,
         train_windows,
         train_targets,
         validation_windows,
@@ -570,7 +570,7 @@ def train_gamma_model(
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
-) -> Cnn1DGammaModel:
+) -> GammaModel:
     """Train a 1D-CNN Gamma model through `GammaVarianceStage`.
 
     Consumes the frozen, already-trained Stage-1 mean model's squared
@@ -594,12 +594,12 @@ def train_gamma_model(
             none to train silently.
 
     Returns:
-        The trained `Cnn1DGammaModel`.
+        The trained `GammaModel`.
     """
     n_sensors = windows.shape[-1]
     rngs = nnx.Rngs(seed_stream_key(config, GAMMA_NETWORK_STREAM))
     backbone = build_backbone(n_sensors, config.gamma_net_config, rngs=rngs)
-    model = Cnn1DGammaModel(backbone, rngs=rngs)
+    model = GammaModel(backbone, rngs=rngs)
     optimizer = create_optimizer(
         model,
         optax.adamw(config.learning_rate, weight_decay=config.gamma_weight_decay),
@@ -677,7 +677,7 @@ class McDropoutPredictive(nnx.Module):
     """
 
     def __init__(
-        self, network: Cnn1DGaussianModel, *, num_draws: int, key: jax.Array
+        self, network: GaussianModel, *, num_draws: int, key: jax.Array
     ) -> None:
         """Wrap a network, without copying it.
 
@@ -687,7 +687,7 @@ class McDropoutPredictive(nnx.Module):
             num_draws: Number of dropout-mask sets to draw.
             key: The key the mask sets are drawn from.
         """
-        self.network: Cnn1DGaussianModel = network
+        self.network: GaussianModel = network
         self.num_draws: int = num_draws
         self.key: jax.Array = nnx.data(key)
 
@@ -720,7 +720,7 @@ class McDropoutPredictive(nnx.Module):
 
 
 def build_mc_dropout_predictive(
-    network: Cnn1DGaussianModel, config: CmapssConfig
+    network: GaussianModel, config: CmapssConfig
 ) -> McDropoutPredictive:
     """Wrap a clone of a trained network as its MC-Dropout posterior predictive.
 
@@ -812,7 +812,7 @@ def build_staged_mcd_posterior(
     backbone = build_backbone(
         train_windows.shape[-1], config.mean_net_config, rngs=rngs
     )
-    network = Cnn1DMeanModel(backbone, rngs=rngs)
+    network = MeanModel(backbone, rngs=rngs)
     stage = PosteriorStage(
         inference_method=MCDropout(optimizer=optax.set_to_zero()),
         train_loader=make_window_loader(
@@ -849,7 +849,7 @@ class RefitVariancePredictive(nnx.Module, pytree=False):
     """A posterior predictive's draws under a re-fitted Gamma variance."""
 
     def __init__(
-        self, predictive: PosteriorStagePredictive, variance_model: Cnn1DGammaModel
+        self, predictive: PosteriorStagePredictive, variance_model: GammaModel
     ) -> None:
         """Pair the posterior's draws with the re-fitted variance network.
 
@@ -861,7 +861,7 @@ class RefitVariancePredictive(nnx.Module, pytree=False):
         self.predictive: PosteriorStagePredictive = predictive
         variance_model = nnx.clone(variance_model)
         variance_model.eval()
-        self.variance_model: Cnn1DGammaModel = variance_model
+        self.variance_model: GammaModel = variance_model
 
     def __call__(self, inputs: jax.Array) -> PosteriorPredictive:
         """Return the draws, all sharing the re-fitted aleatoric variance."""

@@ -3,9 +3,8 @@
 PROTOTYPE (branch `prototype/lstm-backbone`): the mean and joint networks can
 use either a 1D-CNN (`Cnn1DBackbone`) or an LSTM (`LstmBackbone`) backbone,
 and the Gamma network a single-convolution backbone (`GammaCnnBackbone`).
-Each model takes an already-built backbone; `pipeline.build_backbone` builds
-one from its network configuration. The `Cnn1D*` model names are kept so
-the pipeline and scripts run unchanged; they no longer imply a CNN.
+Each model is a backbone-agnostic output head over an already-built
+backbone; `pipeline.build_backbone` builds one from its network configuration.
 """
 
 from __future__ import annotations
@@ -252,7 +251,7 @@ class GammaCnnBackbone(nnx.Module):
         return jnp.mean(nnx.relu(self.conv(inputs)), axis=1)
 
 
-class Cnn1DMeanModel(nnx.Module):
+class MeanModel(nnx.Module):
     """Deterministic point-RUL regressor over windowed CMAPSS sensor data."""
 
     def __init__(self, backbone: Backbone, *, rngs: nnx.Rngs) -> None:
@@ -283,10 +282,10 @@ class Cnn1DMeanModel(nnx.Module):
         return self.output(self.backbone(inputs, dropout_key=dropout_key))
 
 
-class Cnn1DGammaModel(nnx.Module):
+class GammaModel(nnx.Module):
     """Gamma residual regressor over windowed CMAPSS sensor data.
 
-    Independently initialized from ``Cnn1DMeanModel`` and trained on
+    Independently initialized from ``MeanModel`` and trained on
     Stage-1's squared residuals through
     [`GammaVarianceStage`][stagereg.jax.GammaVarianceStage].
     """
@@ -315,7 +314,7 @@ class Cnn1DGammaModel(nnx.Module):
         return self.head(self.backbone(inputs))
 
 
-class Cnn1DGaussianModel(nnx.Module):
+class GaussianModel(nnx.Module):
     """Joint model: one backbone predicting a Gaussian RUL distribution.
 
     The network of the joint MC-Dropout model: a single backbone followed by

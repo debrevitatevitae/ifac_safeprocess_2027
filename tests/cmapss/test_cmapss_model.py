@@ -17,7 +17,7 @@ _MODEL = importlib.import_module("ifac_safeprocess_2027.cmapss.model")
 _DROPOUT_BACKBONES = ("Cnn1DBackbone", "LstmBackbone")
 """The backbones that accept a dropout rate, for the mean and joint models."""
 
-_DROPOUT_MODELS = ("Cnn1DMeanModel", "Cnn1DGaussianModel")
+_DROPOUT_MODELS = ("MeanModel", "GaussianModel")
 """The CMAPSS models whose backbone may use dropout."""
 
 
@@ -35,7 +35,7 @@ def _build(
 def test_mean_model_outputs_one_scalar_per_example(
     backbone_name: str, batch_size: int, n_sensors: int
 ) -> None:
-    model = _build("Cnn1DMeanModel", backbone_name, n_sensors)
+    model = _build("MeanModel", backbone_name, n_sensors)
     inputs = jax.random.normal(jax.random.key(1), (batch_size, 30, n_sensors))
 
     assert model(inputs).shape == (batch_size, 1)
@@ -70,7 +70,7 @@ def test_backbones_output_their_configured_features(
 
 def test_gamma_model_outputs_one_gamma_distribution_per_example() -> None:
     batch_size, window_length, n_sensors = 4, 30, 9
-    model = _build("Cnn1DGammaModel", "GammaCnnBackbone", n_sensors)
+    model = _build("GammaModel", "GammaCnnBackbone", n_sensors)
     inputs = jax.random.normal(
         jax.random.key(1), (batch_size, window_length, n_sensors)
     )

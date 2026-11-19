@@ -2,10 +2,10 @@
 
 Models compared:
 
-* `joint+mcd` (baseline): a 1D-CNN with a Gaussian head, trained jointly on
+* `joint+mcd` (baseline): an LSTM with a Gaussian head, trained jointly on
   the Gaussian NLL.
-* `staged+mcd`: a 1D-CNN mean stage trained on the squared error, followed by
-  a Gamma variance stage fitted to the mean's held-out squared residuals.
+* `staged+mcd`: an LSTM mean stage trained on the squared error, followed by
+  a small-CNN Gamma variance stage fitted to the mean's held-out squared residuals.
 * `staged+mcd+proxy`: `staged+mcd` with its mean stage trained on a Gaussian
   NLL under a proxy variance that shrinks with the true RUL.
 
@@ -44,7 +44,7 @@ from stagereg.jax import (
     run_supervised,
 )
 
-from ifac_safeprocess_2027.cmapss.model import Cnn1DGaussianModel
+from ifac_safeprocess_2027.cmapss.model import GaussianModel
 from ifac_safeprocess_2027.cmapss.pipeline import (
     TEST_METRICS,
     CmapssConfig,
@@ -81,7 +81,7 @@ def train_joint_model(
     *,
     epochs: int,
     event_sinks: Sequence[EventSink],
-) -> Cnn1DGaussianModel:
+) -> GaussianModel:
     """Train a joint model with `run_supervised` on the Gaussian NLL.
 
     The model trains on the train and validation windows together, the same
@@ -99,13 +99,13 @@ def train_joint_model(
             train silently.
 
     Returns:
-        The trained `Cnn1DGaussianModel`.
+        The trained `GaussianModel`.
     """
     windows = np.concatenate([prepared.train_windows, prepared.validation_windows])
     targets = np.concatenate([prepared.train_targets, prepared.validation_targets])
     # The setup's validation loader is left unused.
     setup = build_supervised_training_setup(
-        Cnn1DGaussianModel,
+        GaussianModel,
         windows,
         targets,
         windows,

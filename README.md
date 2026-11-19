@@ -38,9 +38,9 @@ Trains three different models on the FD001/train sub-dataset and compares their 
 
 The models compared are:
 
-- Joint trained CNN with MC dropout (baseline)
-- Stage-based trained CNN with MC dropout
-- Stage-based trained CNN with MC droput and variance proxy for the mean stage.
+- Joint trained LSTM with MC dropout (baseline)
+- Stage-based trained LSTM mean with MC dropout, and a small CNN for the variance
+- Stage-based trained LSTM mean with MC dropout and variance proxy for the mean stage, and a small CNN for the variance
 
 The metrics scored are:
 
@@ -51,11 +51,11 @@ The metrics scored are:
 
 ### `fd001_dropout_sensitivity.py`
 
-Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the dropout rate used in the MC dropout layers of the CNN.
+Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the dropout rate used in the MC dropout layers of the LSTM.
 
 ### `fd001_train_units_sensitivity.py`
 
-Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the units used to train the CNN.
+Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the units used to train the networks.
 
 ### `fd003_ood.py`
 

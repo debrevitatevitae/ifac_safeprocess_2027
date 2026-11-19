@@ -373,7 +373,7 @@ def test_train_gamma_model_follows_the_gamma_net_config(
     tiny_cmapss_config: Any,
     synthetic_windows: Callable[..., tuple[np.ndarray, np.ndarray]],
 ) -> None:
-    from ifac_safeprocess_2027.cmapss.model import Cnn1DGammaModel
+    from ifac_safeprocess_2027.cmapss.model import GammaModel
 
     gamma_net_config = cmapss_pipeline.GammaCNNConfig(kernel_size=2, hidden_units=3)
     config = dataclasses.replace(tiny_cmapss_config, gamma_net_config=gamma_net_config)
@@ -381,7 +381,7 @@ def test_train_gamma_model_follows_the_gamma_net_config(
     trained = _train_gamma(cmapss_pipeline, config, synthetic_windows)
 
     rngs = nnx.Rngs(0)
-    reference = Cnn1DGammaModel(
+    reference = GammaModel(
         cmapss_pipeline.build_backbone(3, gamma_net_config, rngs=rngs), rngs=rngs
     )
     shapes = jax.tree.map(jnp.shape, nnx.state(trained, nnx.Param))
