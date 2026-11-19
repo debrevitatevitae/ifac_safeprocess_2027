@@ -1,0 +1,32 @@
+Bootstrap: docker
+From: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
+%files
+    pyproject.toml /code/pyproject.toml
+    uv.lock        /code/uv.lock
+    README.md      /code/README.md
+    src            /code/src
+
+%environment
+    export UV_PROJECT_ENVIRONMENT=/opt/venv
+    export UV_FROZEN=1
+    export UV_CACHE_DIR=/tmp/${USER}/uv-cache
+    export CMAPSS_CACHE_DIR=/opt/cmapss
+    export MPLBACKEND=Agg
+
+%post
+    export UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
+    cd /code
+    # deps only, from the lockfile; the project itself comes from the /code bind
+    uv sync --frozen --no-dev --no-install-project
+    # fetch data into a path nothing binds over
+    CMAPSS_CACHE_DIR=/opt/cmapss PYTHONPATH=/code/src \
+        /opt/venv/bin/python -m ifac_safeprocess_2027.cmapss.data --fetch
+    chmod -R a+rX /opt/venv /opt/cmapss
+
+%runscript
+    # Usage: apptainer run -B .:/code uv-cmapss.sif SCRIPT [ARGS...]
+    #   SCRIPT: path relative to scripts/, e.g. cmapss/fd001_base.py
+    cd /code
+    script="$1"; shift
+    exec uv run --no-dev python "scripts/${script}" "$@"
