@@ -217,7 +217,7 @@ def test_cmapss_config_gives_the_joint_model_the_same_default_budget_as_the_mean
     config = cmapss_pipeline.CmapssConfig()
 
     assert config.mean_epochs == config.joint_epochs == 50
-    assert config.variance_epochs == 25
+    assert config.variance_epochs == 50
 
 
 def test_cycles_predictive_maps_a_posterior_predictive_back_to_cycles(
