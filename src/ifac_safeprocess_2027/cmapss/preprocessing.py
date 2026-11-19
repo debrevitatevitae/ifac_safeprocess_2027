@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -185,107 +184,6 @@ def _pad_unit_features(
         n_padded,
     )
     return np.concatenate([padding, features], axis=0)
-
-
-@dataclass(frozen=True)
-class ProxyVarianceSchedule:
-    """A fictitious RUL standard deviation that shrinks linearly to end of life.
-
-    The scale, in cycles, is `initial_scale * rul / reference_rul`, clipped
-    to `[floor, initial_scale]`: wide early in life, where the time to failure
-    is uncertain, and near zero at failure. It depends on the true RUL, so it
-    can weight a training objective but not a prediction.
-
-    Attributes:
-        initial_scale: The scale at and above `reference_rul`, in cycles; the
-            spread of the training units' lifetimes, never below `floor`.
-        reference_rul: The RUL, in cycles, at which the scale reaches
-            `initial_scale`: the training units' mean lifetime.
-        floor: The scale at end of life, in cycles.
-        target_standardization: The statistics the targets passed to `scale`
-            were standardized with.
-    """
-
-    initial_scale: float
-    reference_rul: float
-    floor: float
-    target_standardization: TargetStandardization
-
-    def scale(self, targets: Any) -> Any:
-        """Return the schedule's scale at standardized RUL targets.
-
-        Uses only arithmetic and the array's own `clip`, so it works on NumPy
-        and JAX arrays alike, inside a traced loss included.
-
-        Args:
-            targets: Standardized RUL targets, a NumPy or JAX array of any
-                shape.
-
-        Returns:
-            The scale in standardized units, i.e. divided by the target
-            scale, shaped like `targets`.
-        """
-        standardization = self.target_standardization
-        rul = targets * standardization.scale + standardization.mean
-        cycles = (rul * (self.initial_scale / self.reference_rul)).clip(
-            self.floor, self.initial_scale
-        )
-        return cycles / standardization.scale
-
-
-def fit_proxy_variance_schedule(
-    lifetimes: np.ndarray,
-    target_standardization: TargetStandardization,
-    *,
-    prognosability: float,
-    epsilon_cycles: float,
-) -> ProxyVarianceSchedule:
-    """Fit a `ProxyVarianceSchedule` to the training units' lifetimes.
-
-    The schedule is `clip(sigma_0 * rul / mean_lifetime, sigma_min, sigma_0)`
-    with `sigma_0` the lifetimes' population standard deviation (`ddof=0`)
-    and `sigma_min = sigma_0 * (1 - prognosability) + epsilon_cycles`: the
-    more prognosable the fleet, the more the end-of-life spread shrinks
-    relative to the spread of lifetimes.
-
-    Args:
-        lifetimes: The training units' lifetimes in cycles, one per unit; at
-            least one, all positive.
-        target_standardization: The statistics the training targets were
-            standardized with.
-        prognosability: The fleet's prognosability, in `[0, 1]`: the share of
-            the lifetime spread gone at end of life.
-        epsilon_cycles: Positive offset of the floor, in cycles, keeping it
-            above zero when `prognosability` is 1 or the lifetimes are equal.
-
-    Returns:
-        The schedule starting at `sigma_0`, raised to `sigma_min` if below
-        it, reaching it at the lifetimes' mean and floored at `sigma_min`.
-    """
-    values = np.asarray(lifetimes, dtype=float)
-    spread = float(values.std(ddof=0))
-    floor = spread * (1.0 - prognosability) + epsilon_cycles
-    return ProxyVarianceSchedule(
-        initial_scale=max(spread, floor),
-        reference_rul=float(values.mean()),
-        floor=floor,
-        target_standardization=target_standardization,
-    )
-
-
-def unit_lifetimes(trajectories: pd.DataFrame) -> np.ndarray:
-    """Return each unit's lifetime: its last observed `time_cycles`.
-
-    For run-to-failure trajectories this is the unit's linear RUL at cycle
-    zero, the RUL `build_windows` counts down from.
-
-    Args:
-        trajectories: A DataFrame with `unit_id` and `time_cycles` columns.
-
-    Returns:
-        One lifetime per unit, in cycles, in ascending `unit_id` order.
-    """
-    return trajectories.groupby("unit_id")["time_cycles"].max().to_numpy(dtype=float)
 
 
 def build_windows(

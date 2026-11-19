@@ -172,10 +172,10 @@ def synthetic_prepared_data(cmapss_pipeline: ModuleType) -> Callable[..., Any]:
     It is called as `synthetic_prepared_data(*, seed=0, max_rul=100.0)`. Only the
     windowed arrays (32 train, 8 validation and 6 test windows of length 10 over 3
     sensors) are meant to be trained on. The training trajectories hold four units with
-    random lifetimes in `[1, max_rul]` and zero sensors, only so that a proxy-variance
-    schedule can be fitted to their lifetimes; the validation trajectories are empty. As
-    in the real data, the train and validation targets are standardized with statistics
-    fitted on the train targets, and the test RUL stays in cycles.
+    random lifetimes in `[1, max_rul]` and zero sensors, for the figure to draw; the
+    validation trajectories are empty. As in the real data, the train and validation
+    targets are standardized with statistics fitted on the train targets, and the test
+    RUL stays in cycles.
     """
     import pandas as pd
 

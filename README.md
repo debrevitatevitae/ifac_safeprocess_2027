@@ -34,13 +34,12 @@ The files in `scripts/cmapss` can be run to reproduce the results of the paper. 
 
 ### `fd001_base.py`
 
-Trains three different models on the FD001/train sub-dataset and compares their performance on the FD001/test units. It also visualizes the predictions and the uncertainty estimates for a few test units in the train set.
+Trains two different models on the FD001/train sub-dataset and compares their performance on the FD001/test units. It also visualizes the predictions and the uncertainty estimates for a few test units in the train set.
 
 The models compared are:
 
 - Joint trained LSTM with MC dropout (baseline)
 - Stage-based trained LSTM mean with MC dropout, and a small CNN for the variance
-- Stage-based trained LSTM mean with MC dropout and variance proxy for the mean stage, and a small CNN for the variance
 
 The metrics scored are:
 

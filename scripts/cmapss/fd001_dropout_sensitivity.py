@@ -3,8 +3,7 @@
 Models compared, trained as in `fd001_base.py` for every dropout rate:
 
 * `joint+mcd` ("joint"): the joint-trained baseline.
-* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
-  mean stage.
+* `staged+mcd` ("staged"): the stage-based model.
 
 Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
 coverage, closed-form CRPS and NLL.
@@ -36,13 +35,8 @@ from fd001_base import _train_joint_mcd, _train_staged_mcd, score_on_test_split
 from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
     CyclesPredictive,
-    ProxyVarianceNLL,
     prepare_cmapss_windows,
     with_dropout_rate,
-)
-from ifac_safeprocess_2027.cmapss.preprocessing import (
-    fit_proxy_variance_schedule,
-    unit_lifetimes,
 )
 from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
@@ -60,21 +54,13 @@ COLORS = {"joint": "#2a78d6", "staged": "#eb6834"}
 def run_one(seed_config: CmapssConfig, p: float) -> dict[str, dict[str, float]]:
     """Train and score both models at dropout rate `p`: metrics by model name."""
     prepared = prepare_cmapss_windows(seed_config)
-    schedule = fit_proxy_variance_schedule(
-        unit_lifetimes(prepared.train_trajectories),
-        prepared.target_standardization,
-        prognosability=seed_config.proxy_variance_prognosability,
-        epsilon_cycles=seed_config.proxy_variance_epsilon_cycles,
-    )
     p_config = dataclasses.replace(
         with_dropout_rate(seed_config, p),
         num_draws=1 if p == 0.0 else seed_config.num_draws,
     )
     trained = {
         "joint": _train_joint_mcd(prepared, p_config),
-        "staged": _train_staged_mcd(
-            prepared, p_config, objective=ProxyVarianceNLL(schedule)
-        ),
+        "staged": _train_staged_mcd(prepared, p_config),
     }
     scores = {}
     for name, model in trained.items():

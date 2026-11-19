@@ -12,6 +12,17 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
   environment variables are now `CMAPSS_CACHE_DIR` and `CMAPSS_ARCHIVE`, and
   the default cache directory is `~/.cache/cmapss`.
 
+### Removed
+
+- The staged MC-Dropout proxy-variance model (`staged+mcd+proxy`), with
+  `ProxyVarianceNLL`, `ProxyVarianceSchedule`, `fit_proxy_variance_schedule`,
+  `unit_lifetimes` and the `proxy_variance_*` config fields. It showed no clear
+  benefit once the mean network became an LSTM, and is out of the paper's
+  scope. `fd001_base.py` now compares `joint+mcd` and `staged+mcd`; the
+  dropout, train-units and FD003 OOD scripts use `staged+mcd` as their
+  `"staged"` model. `train_mean_model` and `_train_staged_mcd` drop their
+  `objective` parameter: the mean stage always trains on the squared error.
+
 ### Changed
 
 - The staged MC-Dropout models' Gamma stage fits **held-out residuals**, on the

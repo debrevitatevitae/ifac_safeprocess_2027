@@ -543,12 +543,10 @@ def test_every_row_draws_its_own_mean_and_names_both_bands(
 ) -> None:
     trajectories = build_trajectories({1: 30, 2: 12, 3: 20})
     window_length = 4
-    offsets = (0.0, 100.0, 200.0)
+    offsets = (0.0, 100.0)
     models = [
         cmapss_plots.LabelledModel(label, _StubPosteriorModel(offset=offset))
-        for label, offset in zip(
-            ("joint+mcd", "staged+mcd", "staged+mcd+proxy"), offsets, strict=True
-        )
+        for label, offset in zip(("joint+mcd", "staged+mcd"), offsets, strict=True)
     ]
     bands = {
         cmapss_plots._TOTAL_INTERVAL_LABEL,

@@ -21,12 +21,11 @@ pytest.importorskip("optax")
 _METRIC_NAMES = {"rmse", "coverage", "closed_form_crps", "nll"}
 
 
-_MODEL_NAMES = ("joint+mcd", "staged+mcd", "staged+mcd+proxy")
+_MODEL_NAMES = ("joint+mcd", "staged+mcd")
 
 _MODEL_LABELS = (
     "Joint MC-Dropout model",
     "Staged MC-Dropout model",
-    "Staged MC-Dropout proxy-variance model",
 )
 
 
@@ -70,7 +69,7 @@ def test_compare_models_prepares_the_data_once_per_seed_from_that_seed(
         )
 
 
-def test_compare_models_scores_the_three_mcd_models_once_per_seed(
+def test_compare_models_scores_the_two_mcd_models_once_per_seed(
     cmapss_fd001: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
@@ -236,21 +235,6 @@ def test_mcd_models_without_dropout_collapse_to_a_single_draw(
             np.testing.assert_allclose(variance, variances[0], rtol=1e-5)
 
 
-def test_the_proxy_variance_changes_only_the_staged_mean_objective(
-    cmapss_fd001: ModuleType,
-    mcd_config: Any,
-    synthetic_prepared_data: Callable[..., Any],
-) -> None:
-    prepared = synthetic_prepared_data()
-
-    (result,) = cmapss_fd001.compare_models(
-        mcd_config, seeds=1, prepare=_always(prepared)
-    )
-
-    _, staged_mcd, proxy = result.models
-    assert proxy.metrics != staged_mcd.metrics
-
-
 def _fixed_posterior_model(low: float, high: float, scales: tuple[float, float]) -> Any:
     """Return a stand-in model mapping any windows to the same two-draw mixture.
 
@@ -377,7 +361,7 @@ def test_format_comparison_table_gives_each_model_a_mean_and_sample_std_column(
 def test_format_comparison_table_gives_one_column_per_model_result_in_order(
     cmapss_fd001: ModuleType,
 ) -> None:
-    names = ("joint+mcd", "staged+mcd", "staged+mcd+proxy")
+    names = ("joint+mcd", "staged+mcd")
 
     def model(name: str, nll: float) -> Any:
         metrics = {"rmse": 0.0, "coverage": 1.0, "closed_form_crps": 0.0, "nll": nll}
@@ -396,7 +380,7 @@ def test_format_comparison_table_gives_one_column_per_model_result_in_order(
     header, *rows = table.splitlines()
     assert tuple(header.split()) == names
     (nll,) = [row for row in rows if row.startswith("NLL")]
-    assert nll.split()[1::3] == ["0.0000", "1.0000", "2.0000"]
+    assert nll.split()[1::3] == ["0.0000", "1.0000"]
 
 
 @pytest.mark.usefixtures("offline_fd001")
@@ -470,14 +454,12 @@ def test_main_prints_one_line_per_run_and_a_mean_std_table_then_plots(
         for name in _METRIC_NAMES:
             assert f"{name}=" in line
     (header,) = [
-        line
-        for line in lines
-        if re.search(r"joint\+mcd\s+staged\+mcd\s+staged\+mcd\+proxy\s*$", line)
+        line for line in lines if re.search(r"joint\+mcd\s+staged\+mcd\s*$", line)
     ]
     table = lines[lines.index(header) + 1 :]
     for row in ("RMSE", "95% coverage", "closed-form CRPS", "NLL"):
         (line,) = [line for line in table if line.startswith(row)]
-        assert re.fullmatch(rf"{re.escape(row)}(\s+{_CELL}){{3}}", line)
+        assert re.fullmatch(rf"{re.escape(row)}(\s+{_CELL}){{2}}", line)
 
 
 def test_the_staged_gamma_fits_train_on_the_held_out_residuals(
@@ -505,16 +487,13 @@ def test_the_staged_gamma_fits_train_on_the_held_out_residuals(
 
     cmapss_fd001.compare_models(mcd_config, seeds=1, prepare=_always(prepared))
 
-    # Both staged models: the mean on the train split, and both Gamma fits
+    # The staged model: the mean on the train split, and both Gamma fits
     # (after the mean stage, and the refit to the posterior mean) on the
     # validation split, whose residuals the mean never trained on.
-    assert [windows is prepared.train_windows for windows in mean_fitted_on] == [
-        True,
-        True,
-    ]
+    assert [windows is prepared.train_windows for windows in mean_fitted_on] == [True]
     assert [windows is prepared.validation_windows for windows in gamma_fitted_on] == [
         True
-    ] * 4
+    ] * 2
 
 
 def test_the_joint_model_trains_on_train_and_validation_without_monitoring(

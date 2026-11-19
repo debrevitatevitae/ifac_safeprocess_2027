@@ -3,8 +3,7 @@
 Models compared, trained as in `fd001_base.py`:
 
 * `joint+mcd` ("joint"): the joint-trained baseline.
-* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
-  mean stage.
+* `staged+mcd` ("staged"): the stage-based model.
 
 Metrics scored on FD003/test, over seeds: RMSE, 95% interval coverage,
 closed-form CRPS and the ratio of the 95% interval width on FD003/test to that
@@ -57,7 +56,6 @@ from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
     CyclesPredictive,
     PreparedCmapssData,
-    ProxyVarianceNLL,
     evaluate_test_metrics,
     prepare_cmapss_windows,
 )
@@ -65,8 +63,6 @@ from ifac_safeprocess_2027.cmapss.plots import _draw_unit_rul_curve
 from ifac_safeprocess_2027.cmapss.preprocessing import (
     apply_standardization,
     build_last_windows,
-    fit_proxy_variance_schedule,
-    unit_lifetimes,
 )
 from ifac_safeprocess_2027.parallel import add_jobs_argument, spawn_pool
 
@@ -187,18 +183,9 @@ def train_and_score_seed(
         _SENSOR_NAMES,
         window_length=config.window_length,
     )
-    schedule = fit_proxy_variance_schedule(
-        unit_lifetimes(prepared.train_trajectories),
-        prepared.target_standardization,
-        prognosability=config.proxy_variance_prognosability,
-        epsilon_cycles=config.proxy_variance_epsilon_cycles,
-    )
     models = {
         "joint": ("Joint MC-Dropout", _train_joint_mcd(prepared, config)),
-        "staged": (
-            "Staged MC-Dropout proxy",
-            _train_staged_mcd(prepared, config, objective=ProxyVarianceNLL(schedule)),
-        ),
+        "staged": ("Staged MC-Dropout", _train_staged_mcd(prepared, config)),
     }
     results: list[ModelResult] = []
     for name, (label, raw) in models.items():

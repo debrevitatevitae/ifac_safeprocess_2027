@@ -531,38 +531,6 @@ def test_prepared_data_standardizes_every_subset_with_training_statistics(
     )
 
 
-def test_proxy_variance_nll_scores_predictions_under_the_schedule_scale(
-    cmapss_pipeline: ModuleType, cmapss_preprocessing: ModuleType
-) -> None:
-    from stagereg.core.types import Batch
-
-    standardization = cmapss_preprocessing.TargetStandardization(mean=50.0, scale=25.0)
-    schedule = cmapss_preprocessing.ProxyVarianceSchedule(
-        initial_scale=100.0,
-        reference_rul=200.0,
-        floor=5.0,
-        target_standardization=standardization,
-    )
-    # RUL 100 cycles: target 2.0, scale 50/25 = 2.0, residual 1.0.
-    # RUL 0 cycles: target -2.0, scale floor 5/25 = 0.2, residual 0.2.
-    targets = jnp.array([[2.0], [-2.0]])
-    prediction = jnp.array([[3.0], [-1.8]])
-
-    nll = cmapss_pipeline.ProxyVarianceNLL(schedule).per_example(
-        prediction, Batch(inputs=prediction, targets=targets)
-    )
-
-    half_log_two_pi = 0.5 * math.log(2.0 * math.pi)
-    np.testing.assert_allclose(
-        nll,
-        [
-            [0.5 * 0.25 + math.log(2.0) + half_log_two_pi],
-            [0.5 * 1.0 + math.log(0.2) + half_log_two_pi],
-        ],
-        rtol=1e-5,
-    )
-
-
 @pytest.mark.usefixtures("offline_fd001")
 def test_prepared_data_draws_both_subsets_from_the_given_train_units(
     cmapss_pipeline: ModuleType, short_window_config: Any

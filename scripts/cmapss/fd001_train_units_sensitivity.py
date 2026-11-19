@@ -4,8 +4,7 @@ Models compared, trained as in `fd001_base.py` on nested random subsets of the
 FD001/train units:
 
 * `joint+mcd` ("joint"): the joint-trained baseline.
-* `staged+mcd+proxy` ("staged"): the stage-based model with the proxy-variance
-  mean stage.
+* `staged+mcd` ("staged"): the stage-based model.
 
 Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
 coverage, closed-form CRPS and NLL.
@@ -38,12 +37,7 @@ from ifac_safeprocess_2027.cmapss.data import load_fd001_data
 from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
     CyclesPredictive,
-    ProxyVarianceNLL,
     prepare_cmapss_windows,
-)
-from ifac_safeprocess_2027.cmapss.preprocessing import (
-    fit_proxy_variance_schedule,
-    unit_lifetimes,
 )
 from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
@@ -63,17 +57,9 @@ def run_one(
 ) -> dict[str, dict[str, float]]:
     """Train and score both models on `train_units`: metrics by model name."""
     prepared = prepare_cmapss_windows(seed_config, train_units=train_units)
-    schedule = fit_proxy_variance_schedule(
-        unit_lifetimes(prepared.train_trajectories),
-        prepared.target_standardization,
-        prognosability=seed_config.proxy_variance_prognosability,
-        epsilon_cycles=seed_config.proxy_variance_epsilon_cycles,
-    )
     trained = {
         "joint": _train_joint_mcd(prepared, seed_config),
-        "staged": _train_staged_mcd(
-            prepared, seed_config, objective=ProxyVarianceNLL(schedule)
-        ),
+        "staged": _train_staged_mcd(prepared, seed_config),
     }
     scores = {}
     for name, model in trained.items():

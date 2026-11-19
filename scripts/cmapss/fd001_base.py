@@ -1,4 +1,4 @@
-"""Train three MC-Dropout models on FD001/train and compare them on FD001/test.
+"""Train two MC-Dropout models on FD001/train and compare them on FD001/test.
 
 Models compared:
 
@@ -6,8 +6,6 @@ Models compared:
   the Gaussian NLL.
 * `staged+mcd`: an LSTM mean stage trained on the squared error, followed by
   a small-CNN Gamma variance stage fitted to the mean's held-out squared residuals.
-* `staged+mcd+proxy`: `staged+mcd` with its mean stage trained on a Gaussian
-  NLL under a proxy variance that shrinks with the true RUL.
 
 Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
 coverage, closed-form CRPS and NLL.
@@ -35,7 +33,6 @@ from pathlib import Path
 import numpy as np
 from flax import nnx
 from stagereg.core import NegativeLogLikelihood, NegativeLogLikelihoodLoss
-from stagereg.core.distributions import PredictionLoss
 from stagereg.core.metric_registry import EpochMetric
 from stagereg.core.tracking import EventSink
 from stagereg.jax import (
@@ -50,7 +47,6 @@ from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
     CyclesPredictive,
     PreparedCmapssData,
-    ProxyVarianceNLL,
     build_mc_dropout_predictive,
     build_staged_mcd_posterior,
     build_supervised_training_setup,
@@ -62,9 +58,7 @@ from ifac_safeprocess_2027.cmapss.pipeline import (
 )
 from ifac_safeprocess_2027.cmapss.plots import LabelledModel, plot_validation_rul_curves
 from ifac_safeprocess_2027.cmapss.preprocessing import (
-    fit_proxy_variance_schedule,
     select_lifetime_spanning_units,
-    unit_lifetimes,
 )
 from ifac_safeprocess_2027.parallel import add_jobs_argument, spawn_pool
 
@@ -187,7 +181,7 @@ class SeedComparison:
         prepared: The FD001 windows prepared from `seed`: its train/validation
             split, and the standardization fitted on its train split.
         models: One result per model, in the table's column order:
-            `joint+mcd`, `staged+mcd`, then `staged+mcd+proxy`.
+            `joint+mcd`, then `staged+mcd`.
     """
 
     seed: int
@@ -235,8 +229,6 @@ def _train_joint_mcd(prepared: PreparedCmapssData, config: CmapssConfig) -> nnx.
 def _train_staged_mcd(
     prepared: PreparedCmapssData,
     config: CmapssConfig,
-    *,
-    objective: PredictionLoss | None = None,
 ) -> nnx.Module:
     """Silently train the staged MC-Dropout model and return its predictive.
 
@@ -250,8 +242,6 @@ def _train_staged_mcd(
         prepared: The prepared FD001 windows to train and validate on.
         config: Example configuration; its `seed` initializes the networks and
             sets the mean network's training masks and the predictive's draws.
-        objective: The mean stage's per-window objective; `None`, the
-            default, is the squared error.
 
     Returns:
         The posterior's draws under the re-fitted Gamma variance.
@@ -263,7 +253,6 @@ def _train_staged_mcd(
         prepared.validation_targets,
         config,
         event_sinks=(),
-        objective=objective,
     )
     train_gamma_model(
         state,
@@ -293,8 +282,8 @@ def _train_and_score_seed(
 ) -> SeedComparison:
     """Train and score every model of the comparison from `config.seed`.
 
-    The models are the joint MC-Dropout, the staged MC-Dropout and the staged
-    MC-Dropout proxy-variance model. Each is trained from scratch on the
+    The models are the joint MC-Dropout and the staged MC-Dropout model. Each
+    is trained from scratch on the
     standardized targets, wrapped in `CyclesPredictive`, and scored in that
     order.
 
@@ -320,22 +309,10 @@ def _train_and_score_seed(
     staged_mcd_result = score(
         "staged+mcd", "Staged MC-Dropout model", _train_staged_mcd(prepared, config)
     )
-    schedule = fit_proxy_variance_schedule(
-        unit_lifetimes(prepared.train_trajectories),
-        prepared.target_standardization,
-        prognosability=config.proxy_variance_prognosability,
-        epsilon_cycles=config.proxy_variance_epsilon_cycles,
-    )
-    proxy_model = _train_staged_mcd(
-        prepared, config, objective=ProxyVarianceNLL(schedule)
-    )
-    proxy_result = score(
-        "staged+mcd+proxy", "Staged MC-Dropout proxy-variance model", proxy_model
-    )
     return SeedComparison(
         seed=config.seed,
         prepared=prepared,
-        models=(joint_mcd_result, staged_mcd_result, proxy_result),
+        models=(joint_mcd_result, staged_mcd_result),
     )
 
 
@@ -378,11 +355,8 @@ def compare_models(
     and trained models, so a caller can plot, say, the first seed's models
     without retraining.
 
-    The models are the joint MC-Dropout (`"joint+mcd"`), the staged
-    MC-Dropout (`"staged+mcd"`) and the staged MC-Dropout proxy-variance
-    (`"staged+mcd+proxy"`) model, in that order. The last one's mean stage
-    trains on `ProxyVarianceNLL`, with a schedule fitted to the training
-    units' lifetimes.
+    The models are the joint MC-Dropout (`"joint+mcd"`) and the staged
+    MC-Dropout (`"staged+mcd"`) model, in that order.
 
     Args:
         config: Example configuration; its `seed` is the first seed.
@@ -489,8 +463,8 @@ def print_run(model: str, seed: int, metrics: dict[str, float]) -> None:
 def main() -> None:
     """Compare the CMAPSS MC-Dropout models over seeds, print and plot the results.
 
-    Compares `joint+mcd`, `staged+mcd` and `staged+mcd+proxy`, in that order, and draws
-    every model as one row of the figure.
+    Compares `joint+mcd` and `staged+mcd`, in that order, and draws every model as one
+    row of the figure.
 
     Pass `--seeds` to set the number of seeds (default 5), `--jobs` to train them in
     that many processes (default 1) and `--plot-path` to save the first seed's RUL-

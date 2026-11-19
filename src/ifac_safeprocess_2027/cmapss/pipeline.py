@@ -5,8 +5,7 @@ windows and standardized RUL targets (`prepare_cmapss_windows`). Trains the
 staged pipeline through `stagereg`'s explicit supervised stages:
 
 * `train_mean_model` trains a 1D-CNN or LSTM mean model via `MeanStage`,
-  optionally with dropout and under a proxy-variance objective
-  (`ProxyVarianceNLL`).
+  optionally with dropout, on the squared error.
 * `train_gamma_model` trains an independently-initialized Gamma model,
   on a small 1D-CNN backbone, on the mean model's squared residuals via `GammaVarianceStage`.
 * `build_staged_mcd_posterior` runs an inference-only MC-Dropout posterior
@@ -35,8 +34,7 @@ import numpy as np
 import optax
 import pandas as pd
 from flax import nnx
-from stagereg.core.distributions import PredictionLoss
-from stagereg.core.losses import NegativeLogLikelihoodLoss, SquaredErrorLoss
+from stagereg.core.losses import SquaredErrorLoss
 from stagereg.core.metric_registry import (
     ClosedFormContinuousRankedProbabilityScore,
     EpochMetric,
@@ -48,7 +46,6 @@ from stagereg.core.tracking import EventSink
 from stagereg.core.types import Batch, ParameterRole, StageState, TrainingState
 from stagereg.jax import (
     GammaVarianceStage,
-    Gaussian,
     HeldOutValidation,
     MCDropout,
     MeanStage,
@@ -78,7 +75,6 @@ from .model import (
     MeanModel,
 )
 from .preprocessing import (
-    ProxyVarianceSchedule,
     SensorStandardization,
     TargetStandardization,
     apply_standardization,
@@ -233,14 +229,6 @@ class CmapssConfig:
             both the Gamma stage and its re-fit to the posterior mean.
         num_draws: Number of dropout-mask sets an MC-Dropout model's posterior
             predictive mixes.
-        proxy_variance_prognosability: Prognosability, in `[0, 1]`, setting
-            the end-of-life floor `sigma_0 * (1 - prognosability) + epsilon`
-            of the proxy-variance schedule the staged MC-Dropout proxy
-            model's mean stage is trained under; see `ProxyVarianceNLL` and
-            `fit_proxy_variance_schedule`. Defaults to 0.87, the C-MAPSS
-            value reported in the literature.
-        proxy_variance_epsilon_cycles: Positive offset, in cycles, of that
-            floor, keeping it above zero.
         seed: Base JAX random seed for splitting, model init, and training.
     """
 
@@ -256,8 +244,6 @@ class CmapssConfig:
     mean_epochs: int = 50
     variance_epochs: int = 50
     num_draws: int = 100
-    proxy_variance_prognosability: float = 0.87
-    proxy_variance_epsilon_cycles: float = 1e-6
     seed: int = 0
 
     def __post_init__(self) -> None:
@@ -267,9 +253,8 @@ class CmapssConfig:
 
         Raises:
             ValueError: If sizes, epochs or draws are not positive, the
-                Gamma weight decay is negative, the validation fraction is
-                not in (0, 1), the proxy-variance prognosability is not in
-                [0, 1], or its epsilon is not positive.
+                Gamma weight decay is negative, or the validation fraction
+                is not in (0, 1).
         """
         if self.window_length <= 0 or self.batch_size <= 0:
             raise ValueError("window_length and batch_size must be positive.")
@@ -283,10 +268,6 @@ class CmapssConfig:
             raise ValueError("validation_fraction must be within (0, 1).")
         if self.num_draws <= 0:
             raise ValueError("num_draws must be positive.")
-        if not 0.0 <= self.proxy_variance_prognosability <= 1.0:
-            raise ValueError("proxy_variance_prognosability must be within [0, 1].")
-        if not self.proxy_variance_epsilon_cycles > 0.0:
-            raise ValueError("proxy_variance_epsilon_cycles must be positive.")
 
 
 def with_dropout_rate(config: CmapssConfig, dropout_rate: float) -> CmapssConfig:
@@ -458,49 +439,6 @@ def build_supervised_training_setup[ModelT: nnx.Module](
     )
 
 
-@dataclass(frozen=True)
-class ProxyVarianceNLL:
-    """Gaussian NLL of a point prediction under a fixed, RUL-dependent scale.
-
-    Scores each prediction as the location of a `Gaussian` whose scale is the
-    schedule's at the window's true RUL. The scale is fixed, so for the mean
-    it is the squared error weighted by `1 / scale**2`, plus a constant: end-
-    of-life windows weigh most. Trained with dropout, the weighted error
-    penalizes the spread dropout masks cause most where the weight is
-    largest, so the MC-Dropout spread is pushed down toward end of life.
-
-    The schedule tells an aleatoric story, a time to failure that grows more
-    certain as failure nears, but here it shapes the epistemic spread of the
-    dropout masks. The Gamma variance fitted afterwards models the aleatoric
-    part independently, so the two can overlap near end of life; this is a
-    deliberate modelling choice of the experiment.
-
-    Attributes:
-        schedule: The proxy-variance schedule giving the scale at each
-            standardized target.
-    """
-
-    schedule: ProxyVarianceSchedule
-
-    def per_example(self, prediction: jax.Array, batch: Batch) -> jax.Array:
-        """Compute the per-window NLL under the schedule's scale.
-
-        Args:
-            prediction: The mean network's standardized point predictions.
-            batch: Batch holding the standardized RUL targets.
-
-        Returns:
-            An array of per-window negative log-likelihood values.
-
-        Raises:
-            ValueError: If `batch.targets` is missing.
-        """
-        if batch.targets is None:
-            raise ValueError("batch.targets must be provided.")
-        gaussian = Gaussian(loc=prediction, scale=self.schedule.scale(batch.targets))
-        return NegativeLogLikelihoodLoss().per_example(gaussian, batch)
-
-
 def train_mean_model(
     train_windows: np.ndarray,
     train_targets: np.ndarray,
@@ -509,11 +447,11 @@ def train_mean_model(
     config: CmapssConfig,
     *,
     event_sinks: Sequence[EventSink],
-    objective: PredictionLoss | None = None,
 ) -> tuple[MeanModel, TrainingState]:
     """Train a mean model through `MeanStage` on windowed RUL data.
 
-    The network is `config.mean_net_config`, trained with its dropout active.
+    The network is `config.mean_net_config`, trained with its dropout active
+    on the squared error.
 
     Args:
         train_windows: Training sliding windows, shape `(n_train,
@@ -525,8 +463,6 @@ def train_mean_model(
         config: Example configuration controlling model size and training.
         event_sinks: Sinks notified of the stage's training events; pass
             none to train silently.
-        objective: The per-window objective the mean is trained and
-            validated on; `None`, the default, is `SquaredErrorLoss`.
 
     Returns:
         A tuple of the trained `MeanModel` and the shared staged
@@ -541,7 +477,7 @@ def train_mean_model(
         config,
         net_config=config.mean_net_config,
     )
-    loss = make_supervised_loss(SquaredErrorLoss() if objective is None else objective)
+    loss = make_supervised_loss(SquaredErrorLoss())
     stage = MeanStage(
         model=setup.model,
         optimizer=setup.optimizer,
