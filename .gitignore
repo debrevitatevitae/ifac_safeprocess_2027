@@ -14,3 +14,6 @@ wheels/
 
 # Ouptut plots
 img/
+
+# Apptainer images
+*.sif
