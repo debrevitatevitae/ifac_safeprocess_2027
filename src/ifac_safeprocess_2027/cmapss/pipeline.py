@@ -254,7 +254,7 @@ class CmapssConfig:
     learning_rate: float = 1e-3
     joint_epochs: int = 50
     mean_epochs: int = 50
-    variance_epochs: int = 25
+    variance_epochs: int = 50
     num_draws: int = 100
     proxy_variance_prognosability: float = 0.87
     proxy_variance_epsilon_cycles: float = 1e-6
