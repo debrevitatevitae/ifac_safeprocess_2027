@@ -71,11 +71,11 @@ from .data import (
 from .model import (
     Backbone,
     Cnn1DBackbone,
+    GammaCnnBackbone,
     GammaModel,
     GaussianModel,
-    MeanModel,
-    GammaCnnBackbone,
     LstmBackbone,
+    MeanModel,
 )
 from .preprocessing import (
     ProxyVarianceSchedule,
