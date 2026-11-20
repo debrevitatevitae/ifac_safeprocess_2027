@@ -19,10 +19,10 @@ marks the model, the line style the dropout rate.
 Run it with:
 
     uv run python scripts/cmapss/fd001_calibration.py --seeds 5 [--rates 0.3 0.9] \
-        [--jobs 5] [--plot-path calibration.png]
+        [--jobs 10] [--plot-path calibration.png]
 
-`--plot-path` saves the figure instead of displaying it. `--jobs` trains each rate's
-seeds in that many processes: the first seed in this one, the others in workers.
+`--plot-path` saves the figure instead of displaying it. `--jobs` trains the
+(rate, seed) runs in that many processes, so up to `len(rates) * seeds` of them help.
 Every rate trains from the same seeds.
 """
 
@@ -30,19 +30,25 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from fd001_base import SeedComparison, _mean_std, compare_models, print_run
+from fd001_base import (
+    SeedComparison,
+    _mean_std,
+    _train_and_score_seed_in_worker,
+)
 
 from ifac_safeprocess_2027.cmapss.calibration import CALIBRATION_LEVELS
 from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
+    PreparedCmapssData,
     prepare_cmapss_windows,
     with_dropout_rate,
 )
@@ -50,7 +56,7 @@ from ifac_safeprocess_2027.cmapss.plots import (
     LabelledCalibrationCurves,
     plot_calibration_curves,
 )
-from ifac_safeprocess_2027.parallel import add_jobs_argument
+from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
 RATES = (0.3, 0.9)
 """The default dropout rates: the configured 0.3, and 0.9, where the joint model's
@@ -173,13 +179,92 @@ def config_at_rate(config: CmapssConfig, rate: float) -> CmapssConfig:
     )
 
 
+def print_rate_run(
+    rate: float, model: str, seed: int, metrics: dict[str, float]
+) -> None:
+    """Print one finished (rate, seed, model) run's test metrics on one line.
+
+    Args:
+        rate: The dropout rate the model was trained at.
+        model: The model's name, e.g. `"joint+mcd"`.
+        seed: The seed the model was initialized from.
+        metrics: The model's test metrics by name.
+    """
+    values = ", ".join(f"{name}={value:.4f}" for name, value in metrics.items())
+    print(f"[{model} p={rate:g} seed={seed}] {values}", flush=True)
+
+
+type _RateTask = tuple[
+    float, CmapssConfig, Callable[[CmapssConfig], PreparedCmapssData]
+]
+"""One run: the dropout rate, the seed's configuration and the data preparation."""
+
+
+def _train_and_score_rate_task(task: _RateTask) -> SeedComparison:
+    """Train and score one (rate, seed) run's models, for `process_map`.
+
+    Args:
+        task: The dropout rate, the seed's configuration and the data preparation.
+
+    Returns:
+        The run's `SeedComparison`, without its trained models.
+    """
+    rate, seed_config, prepare = task
+    return _train_and_score_seed_in_worker(
+        config_at_rate(seed_config, rate),
+        prepare,
+        functools.partial(print_rate_run, rate),
+    )
+
+
+def train_over_rates(
+    config: CmapssConfig,
+    *,
+    seeds: int,
+    rates: Sequence[float],
+    prepare: Callable[[CmapssConfig], PreparedCmapssData] = prepare_cmapss_windows,
+    jobs: int = 1,
+) -> dict[float, list[SeedComparison]]:
+    """Train and score both MC-Dropout models at every (dropout rate, seed).
+
+    Seed index `i` runs under `config.seed + i` at every rate, as in
+    `compare_models`. The runs are independent and train in up to `jobs`
+    processes, so up to `len(rates) * seeds` of them help; each prints its
+    models' test metrics as they are scored. No run keeps its trained models.
+
+    Args:
+        config: Example configuration; its `seed` is the first seed.
+        seeds: Number of seeds to train from at each rate.
+        rates: Dropout rates, each in `[0, 1)`; a repeated rate trains once.
+        prepare: Prepares the FD001 windows from a run's configuration;
+            `prepare_cmapss_windows` by default. Must be picklable if `jobs > 1`.
+        jobs: Number of processes; `1` trains every run in this one, in order.
+
+    Returns:
+        One `SeedComparison` per seed, in seed order, by rate, in the order the
+        rates first appear.
+    """
+    rates = list(dict.fromkeys(rates))
+    seed_configs = [
+        dataclasses.replace(config, seed=config.seed + index) for index in range(seeds)
+    ]
+    tasks = [
+        (rate, seed_config, prepare) for rate in rates for seed_config in seed_configs
+    ]
+    results = process_map(_train_and_score_rate_task, tasks, jobs=jobs)
+    return {
+        rate: results[index * seeds : (index + 1) * seeds]
+        for index, rate in enumerate(rates)
+    }
+
+
 def main() -> None:
     """Compare the FD001 MC-Dropout models' calibration over seeds and rates.
 
     Pass `--seeds` to set the number of seeds (default 5), `--rates` the dropout rates
-    (default 0.3 and 0.9), `--jobs` to train each rate's seeds in that many processes
-    (default 1) and `--plot-path` to save the calibration figure to that path instead of
-    displaying it.
+    (default 0.3 and 0.9), `--jobs` to train the (rate, seed) runs in that many
+    processes (default 1) and `--plot-path` to save the calibration figure to that path
+    instead of displaying it.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -210,17 +295,9 @@ def main() -> None:
     if not all(0.0 <= rate < 1.0 for rate in args.rates):
         parser.error("--rates must each lie in [0, 1).")
 
-    config = CmapssConfig()
-    results_by_rate = {}
-    for rate in dict.fromkeys(args.rates):
-        print(f"\nDropout rate p={rate:g}:", flush=True)
-        results_by_rate[rate] = compare_models(
-            config_at_rate(config, rate),
-            seeds=args.seeds,
-            prepare=prepare_cmapss_windows,
-            on_run=print_run,
-            jobs=args.jobs,
-        )
+    results_by_rate = train_over_rates(
+        CmapssConfig(), seeds=args.seeds, rates=args.rates, jobs=args.jobs
+    )
     calibrations = collect_calibration_curves(results_by_rate)
     print(
         f"\nFD001 test coverage per nominal level over {args.seeds} seeds (mean ± std):"

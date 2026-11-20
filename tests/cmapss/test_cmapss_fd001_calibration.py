@@ -109,3 +109,44 @@ def test_line_style_follows_the_rate_value_not_its_position(
     assert styles["joint+mcd p=0.3"] == "-"
     assert styles["joint+mcd p=0.9"] == "--"
     assert styles["joint+mcd p=0.5"] == "-."
+
+
+def test_every_rate_and_seed_trains_once_from_the_same_seeds_grouped_by_rate(
+    cmapss_fd001_calibration: ModuleType, monkeypatch: Any
+) -> None:
+    script = cmapss_fd001_calibration
+    trained: list[tuple[float, int]] = []
+
+    def fake_train(config: Any, prepare: Any, on_run: Any) -> tuple[float, int]:
+        run = (config.joint_net_config.dropout_rate, config.seed)
+        assert config.mean_net_config.dropout_rate == run[0]
+        trained.append(run)
+        return run
+
+    monkeypatch.setattr(script, "_train_and_score_seed_in_worker", fake_train)
+    config = script.CmapssConfig()
+
+    results_by_rate = script.train_over_rates(
+        config, seeds=2, rates=[0.9, 0.3, 0.9], prepare=None, jobs=1
+    )
+
+    seeds = [config.seed, config.seed + 1]
+    # Repeated rates train once; the mapping keeps the rates' first order.
+    assert list(results_by_rate) == [0.9, 0.3]
+    assert results_by_rate[0.9] == [(0.9, seed) for seed in seeds]
+    assert results_by_rate[0.3] == [(0.3, seed) for seed in seeds]
+    assert sorted(trained) == sorted(
+        [(0.9, s) for s in seeds] + [(0.3, s) for s in seeds]
+    )
+
+
+def test_a_run_line_names_its_model_rate_and_seed(
+    cmapss_fd001_calibration: ModuleType, capsys: Any
+) -> None:
+    cmapss_fd001_calibration.print_rate_run(
+        0.3, "joint+mcd", 2, {"rmse": 1.0, "nll": 2.5}
+    )
+
+    assert (
+        capsys.readouterr().out == "[joint+mcd p=0.3 seed=2] rmse=1.0000, nll=2.5000\n"
+    )
