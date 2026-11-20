@@ -1,4 +1,4 @@
-"""RUL curves with 95% predictive intervals for the CMAPSS example.
+"""RUL curves and calibration curves for the CMAPSS example.
 
 Turns one or more trained models, each predicting a posterior predictive,
 and the standardized trajectories they were trained under into the
@@ -20,6 +20,9 @@ This module knows nothing about training, about the archive, or about
 which units are worth looking at: it takes already-standardized
 trajectories, already-trained labelled models, and the three units to
 draw.
+
+It also draws the calibration curves of several models on one axes, from
+coverage already computed over seeds by `calibration.interval_coverage_curve`.
 """
 
 from __future__ import annotations
@@ -319,6 +322,88 @@ def plot_validation_rul_curves(
     )
     figure.suptitle("CMAPSS FD001 held-out validation RUL curves")
     figure.tight_layout(rect=(0.0, 0.08 / len(models), 1.0, 1.0))
+
+    if save_path is not None:
+        figure.savefig(Path(save_path))
+    else:
+        plt.show()
+    return figure
+
+
+_IDEAL_CALIBRATION_LABEL = "Ideal calibration"
+
+
+@dataclass(frozen=True)
+class LabelledCoverage:
+    """A model's calibration curves over seeds, with the label naming it.
+
+    Attributes:
+        label: The name of the model, shown in the legend, e.g. `"Staged
+            MC-Dropout model"`.
+        coverage: The empirical coverage at each nominal level, one row per
+            seed, shape `(n_seeds, n_levels)`.
+    """
+
+    label: str
+    coverage: np.ndarray
+
+
+def plot_calibration_curves(
+    models: Sequence[LabelledCoverage],
+    levels: Sequence[float],
+    *,
+    save_path: Path | None = None,
+) -> Figure:
+    """Plot each model's calibration curve, mean ± std over seeds, on one axes.
+
+    Each model draws its mean empirical coverage against the nominal
+    confidence level, with a band of ± the sample standard deviation over
+    seeds (none for a single seed). The diagonal marks ideal calibration: a
+    curve below it is overconfident, one above it underconfident.
+
+    Args:
+        models: The models' coverage over seeds, drawn in the order given.
+        levels: The nominal confidence levels the coverage columns belong to.
+        save_path: Where to save the figure. When omitted, the figure is
+            displayed instead.
+
+    Returns:
+        The figure holding the single calibration axes.
+
+    Raises:
+        ValueError: If `models` is empty.
+    """
+    if not models:
+        raise ValueError("At least one labelled coverage is required.")
+    figure, axes = plt.subplots(figsize=(5.5, 5.0))
+    axes.plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        linestyle="--",
+        color="0.5",
+        label=_IDEAL_CALIBRATION_LABEL,
+    )
+    x = np.asarray(levels, dtype=float)
+    for labelled in models:
+        coverage = np.atleast_2d(np.asarray(labelled.coverage, dtype=float))
+        mean = coverage.mean(axis=0)
+        std = (
+            coverage.std(axis=0, ddof=1)
+            if coverage.shape[0] > 1
+            else np.zeros_like(mean)
+        )
+        (line,) = axes.plot(x, mean, marker="o", label=labelled.label)
+        axes.fill_between(
+            x, mean - std, mean + std, color=line.get_color(), alpha=0.2, linewidth=0
+        )
+    axes.set_xlim(0.0, 1.0)
+    axes.set_ylim(0.0, 1.0)
+    axes.set_aspect("equal")
+    axes.set_xlabel("Nominal confidence level")
+    axes.set_ylabel("Empirical coverage")
+    axes.set_title("CMAPSS FD001 test calibration")
+    axes.legend(loc="upper left")
+    figure.tight_layout()
 
     if save_path is not None:
         figure.savefig(Path(save_path))

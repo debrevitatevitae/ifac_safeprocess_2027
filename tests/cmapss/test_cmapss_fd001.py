@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -158,6 +159,31 @@ def test_compare_models_scores_lie_in_their_ranges(
         assert metrics["rmse"] >= 0.0
         assert metrics["closed_form_crps"] >= 0.0
         assert math.isfinite(metrics["nll"])
+
+
+def test_compare_models_gives_each_model_a_calibration_curve_matching_its_coverage(
+    cmapss_fd001: ModuleType,
+    mcd_config: Any,
+    synthetic_prepared_data: Callable[..., Any],
+) -> None:
+    from ifac_safeprocess_2027.cmapss.calibration import CALIBRATION_LEVELS
+
+    prepared = synthetic_prepared_data(seed=0)
+
+    (result,) = cmapss_fd001.compare_models(
+        mcd_config, seeds=1, prepare=_always(prepared)
+    )
+
+    for model in result.models:
+        curve = np.asarray(model.calibration)
+        assert curve.shape == (len(CALIBRATION_LEVELS),)
+        # Central intervals are nested, so coverage never drops as the level rises.
+        assert np.all(np.diff(curve) >= 0.0)
+        assert np.all((0.0 <= curve) & (curve <= 1.0))
+        # Its 95% point is the 95% coverage the test metrics report.
+        assert curve[CALIBRATION_LEVELS.index(0.95)] == pytest.approx(
+            model.metrics["coverage"]
+        )
 
 
 def test_the_joint_model_trains_for_joint_epochs(

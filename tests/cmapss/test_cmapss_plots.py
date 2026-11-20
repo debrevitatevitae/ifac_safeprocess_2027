@@ -580,3 +580,53 @@ def test_every_row_draws_its_own_mean_and_names_both_bands(
         cmapss_plots._TOTAL_INTERVAL_LABEL,
         cmapss_plots._EPISTEMIC_INTERVAL_LABEL,
     ]
+
+
+def test_calibration_curves_draw_mean_and_spread_per_model_over_the_diagonal(
+    cmapss_plots: ModuleType, captured_show: list[bool]
+) -> None:
+    levels = (0.1, 0.5, 0.9)
+    # Two seeds per model: the mean is their average, the band ± their
+    # sample standard deviation.
+    joint = np.array([[0.0, 0.2, 0.6], [0.2, 0.4, 0.8]])
+    staged = np.array([[0.1, 0.5, 0.9], [0.1, 0.5, 0.9]])
+
+    figure = cmapss_plots.plot_calibration_curves(
+        [
+            cmapss_plots.LabelledCoverage("Joint model", joint),
+            cmapss_plots.LabelledCoverage("Staged model", staged),
+        ],
+        levels,
+    )
+
+    assert captured_show == [True]
+    (axes,) = figure.axes
+    lines = _lines_by_label(axes)
+    assert set(lines) == {"Joint model", "Staged model", "Ideal calibration"}
+    np.testing.assert_allclose(lines["Joint model"].get_xdata(), levels)
+    np.testing.assert_allclose(lines["Joint model"].get_ydata(), [0.1, 0.3, 0.7])
+    np.testing.assert_allclose(lines["Staged model"].get_ydata(), [0.1, 0.5, 0.9])
+    np.testing.assert_allclose(lines["Ideal calibration"].get_xdata(), [0.0, 1.0])
+    np.testing.assert_allclose(lines["Ideal calibration"].get_ydata(), [0.0, 1.0])
+    # One ± std band per model: the joint band spans 0.3 ± 0.1414 at 50%.
+    assert len(axes.collections) == 2
+    joint_band = axes.collections[0].get_paths()[0].vertices
+    at_half = joint_band[np.isclose(joint_band[:, 0], 0.5), 1]
+    np.testing.assert_allclose(sorted(set(np.round(at_half, 4))), [0.1586, 0.4414])
+    assert "confidence" in axes.get_xlabel().lower()
+    assert "coverage" in axes.get_ylabel().lower()
+
+
+def test_calibration_curves_are_saved_instead_of_shown_with_a_save_path(
+    cmapss_plots: ModuleType, captured_show: list[bool], tmp_path: Path
+) -> None:
+    save_path = tmp_path / "calibration.png"
+
+    cmapss_plots.plot_calibration_curves(
+        [cmapss_plots.LabelledCoverage("Joint model", np.array([[0.1, 0.5]]))],
+        (0.1, 0.5),
+        save_path=save_path,
+    )
+
+    assert captured_show == []
+    assert save_path.stat().st_size > 0

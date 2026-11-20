@@ -30,6 +30,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import jax.numpy as jnp
 import numpy as np
 from flax import nnx
 from stagereg.core import NegativeLogLikelihood, NegativeLogLikelihoodLoss
@@ -41,6 +42,7 @@ from stagereg.jax import (
     run_supervised,
 )
 
+from ifac_safeprocess_2027.cmapss.calibration import interval_coverage_curve
 from ifac_safeprocess_2027.cmapss.model import GaussianModel
 from ifac_safeprocess_2027.cmapss.pipeline import (
     TEST_METRICS,
@@ -164,12 +166,16 @@ class ModelResult:
             models cannot be sent back.
         metrics: The model's `COMPARISON_METRICS` on the test split, by
             metric name.
+        calibration: The model's calibration curve on the test split: its
+            central intervals' empirical coverage at each of
+            `CALIBRATION_LEVELS`; `None` if it was not computed.
     """
 
     name: str
     label: str
     model: nnx.Module | None
     metrics: dict[str, float]
+    calibration: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -285,7 +291,7 @@ def _train_and_score_seed(
     The models are the joint MC-Dropout and the staged MC-Dropout model. Each
     is trained from scratch on the
     standardized targets, wrapped in `CyclesPredictive`, and scored in that
-    order.
+    order, with its test metrics and its calibration curve.
 
     Args:
         prepared: The prepared FD001 windows to train, validate and score on.
@@ -300,8 +306,18 @@ def _train_and_score_seed(
     def score(name: str, label: str, model: nnx.Module) -> ModelResult:
         model = CyclesPredictive(model, prepared.target_standardization)
         metrics = score_on_test_split(model, prepared)
+        calibration = interval_coverage_curve(
+            model(jnp.asarray(prepared.test_windows, dtype=jnp.float32)),
+            prepared.test_rul,
+        )
         on_run(name, config.seed, metrics)
-        return ModelResult(name=name, label=label, model=model, metrics=metrics)
+        return ModelResult(
+            name=name,
+            label=label,
+            model=model,
+            metrics=metrics,
+            calibration=calibration,
+        )
 
     joint_mcd_result = score(
         "joint+mcd", "Joint MC-Dropout model", _train_joint_mcd(prepared, config)
