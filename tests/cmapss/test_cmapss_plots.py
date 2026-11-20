@@ -593,10 +593,11 @@ def test_calibration_curves_draw_mean_and_spread_per_model_over_the_diagonal(
 
     figure = cmapss_plots.plot_calibration_curves(
         [
-            cmapss_plots.LabelledCoverage("Joint model", joint),
-            cmapss_plots.LabelledCoverage("Staged model", staged),
+            cmapss_plots.LabelledCalibrationCurves("Joint model", joint),
+            cmapss_plots.LabelledCalibrationCurves("Staged model", staged),
         ],
         levels,
+        title="FD001 test calibration",
     )
 
     assert captured_show == [True]
@@ -615,6 +616,7 @@ def test_calibration_curves_draw_mean_and_spread_per_model_over_the_diagonal(
     np.testing.assert_allclose(sorted(set(np.round(at_half, 4))), [0.1586, 0.4414])
     assert "confidence" in axes.get_xlabel().lower()
     assert "coverage" in axes.get_ylabel().lower()
+    assert axes.get_title() == "FD001 test calibration"
 
 
 def test_calibration_curves_are_saved_instead_of_shown_with_a_save_path(
@@ -623,8 +625,9 @@ def test_calibration_curves_are_saved_instead_of_shown_with_a_save_path(
     save_path = tmp_path / "calibration.png"
 
     cmapss_plots.plot_calibration_curves(
-        [cmapss_plots.LabelledCoverage("Joint model", np.array([[0.1, 0.5]]))],
+        [cmapss_plots.LabelledCalibrationCurves("Joint model", np.array([[0.1, 0.5]]))],
         (0.1, 0.5),
+        title="FD001 test calibration",
         save_path=save_path,
     )
 

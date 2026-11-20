@@ -50,7 +50,7 @@ The metrics scored are:
 
 ### `fd001_calibration.py`
 
-Trains the same two models as `fd001_base.py` and draws their calibration curves on FD001/test in one figure: the empirical coverage of each model's central predictive interval against its nominal confidence level (10% to 90% in steps of 10%, and 95%), mean ± std over seeds, against the diagonal of ideal calibration. It also prints the coverage per level as a table.
+Trains the same two models as `fd001_base.py` and draws their calibration curves on FD001/test in one figure: the empirical coverage of each model's central interval against its nominal confidence level (10% to 90% in steps of 10%, and 95%), mean ± std over seeds, against the diagonal of ideal calibration. It also prints the coverage per level as a table.
 
 ```shell
 uv run python scripts/cmapss/fd001_calibration.py --seeds 5 [--jobs 5] [--plot-path calibration.png]

@@ -2,18 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 from types import ModuleType
 
 import numpy as np
 import pytest
-
-
-@pytest.fixture(scope="module")
-def cmapss_calibration() -> ModuleType:
-    """The calibration module, skipped without its JAX dependencies."""
-    pytest.importorskip("stagereg.jax")
-    return importlib.import_module("ifac_safeprocess_2027.cmapss.calibration")
 
 
 def _standard_normal(n_windows: int) -> object:
@@ -32,7 +24,7 @@ def test_coverage_curve_counts_targets_inside_each_central_interval(
     # 0.674 at 50%, 1.645 at 90% and 1.960 at 95%.
     targets = np.array([0.0, 0.5, 1.0, 2.0])
 
-    coverage = cmapss_calibration.interval_coverage_curve(
+    coverage = cmapss_calibration.calibration_curve(
         _standard_normal(targets.size), targets, levels=(0.1, 0.5, 0.9, 0.95)
     )
 
@@ -44,6 +36,6 @@ def test_coverage_curve_rejects_levels_outside_the_unit_interval(
     cmapss_calibration: ModuleType, level: float
 ) -> None:
     with pytest.raises(ValueError, match="levels"):
-        cmapss_calibration.interval_coverage_curve(
+        cmapss_calibration.calibration_curve(
             _standard_normal(2), np.zeros(2), levels=(0.5, level)
         )

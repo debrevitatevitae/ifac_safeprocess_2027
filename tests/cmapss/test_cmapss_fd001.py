@@ -163,11 +163,11 @@ def test_compare_models_scores_lie_in_their_ranges(
 
 def test_compare_models_gives_each_model_a_calibration_curve_matching_its_coverage(
     cmapss_fd001: ModuleType,
+    cmapss_calibration: ModuleType,
     mcd_config: Any,
     synthetic_prepared_data: Callable[..., Any],
 ) -> None:
-    from ifac_safeprocess_2027.cmapss.calibration import CALIBRATION_LEVELS
-
+    levels = cmapss_calibration.CALIBRATION_LEVELS
     prepared = synthetic_prepared_data(seed=0)
 
     (result,) = cmapss_fd001.compare_models(
@@ -175,15 +175,13 @@ def test_compare_models_gives_each_model_a_calibration_curve_matching_its_covera
     )
 
     for model in result.models:
-        curve = np.asarray(model.calibration)
-        assert curve.shape == (len(CALIBRATION_LEVELS),)
+        curve = np.asarray(model.calibration_curve)
+        assert curve.shape == (len(levels),)
         # Central intervals are nested, so coverage never drops as the level rises.
         assert np.all(np.diff(curve) >= 0.0)
         assert np.all((0.0 <= curve) & (curve <= 1.0))
         # Its 95% point is the 95% coverage the test metrics report.
-        assert curve[CALIBRATION_LEVELS.index(0.95)] == pytest.approx(
-            model.metrics["coverage"]
-        )
+        assert curve[levels.index(0.95)] == pytest.approx(model.metrics["coverage"])
 
 
 def test_the_joint_model_trains_for_joint_epochs(

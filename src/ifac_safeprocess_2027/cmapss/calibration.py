@@ -31,7 +31,7 @@ CALIBRATION_LEVELS: tuple[float, ...] = (
 95% the test coverage metric reports."""
 
 
-def interval_coverage_curve(
+def calibration_curve(
     prediction: PosteriorPredictiveDistribution,
     targets: Any,
     *,

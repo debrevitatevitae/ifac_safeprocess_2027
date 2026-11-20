@@ -73,6 +73,14 @@ def cmapss_plots() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def cmapss_calibration() -> ModuleType:
+    """The calibration-curve module."""
+    for dependency in ("jax", "stagereg.jax", "matplotlib", "pandas", "sklearn"):
+        pytest.importorskip(dependency)
+    return importlib.import_module("ifac_safeprocess_2027.cmapss.calibration")
+
+
+@pytest.fixture(scope="session")
 def cmapss_pipeline() -> ModuleType:
     """The data preparation, training and evaluation pipeline module."""
     for dependency in (

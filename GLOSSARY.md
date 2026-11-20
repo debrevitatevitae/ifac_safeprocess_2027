@@ -51,5 +51,5 @@ A mean model's squared residuals on windows it never trained on: in `fd001_base.
 _Avoid_: Validation residuals (ambiguous with monitoring), out-of-fold residuals (no folds here), OOF
 
 **Calibration curve**:
-A model's empirical coverage on a test set plotted against the nominal confidence level, one point per level: for each level `c`, the fraction of targets inside its central predictive interval at `c`, from the `(1 - c) / 2` and `(1 + c) / 2` quantiles of its posterior predictive. A calibrated model follows the diagonal; a curve below it is overconfident, one above it underconfident.
+A model's empirical coverage on a test set plotted against the nominal confidence level, one point per level: for each level `c`, the fraction of targets inside its central interval at `c`, from the `(1 - c) / 2` and `(1 + c) / 2` quantiles of its posterior predictive. A calibrated model follows the diagonal; a curve below it is overconfident, one above it underconfident.
 _Avoid_: Reliability diagram (usually means binned predicted probability against observed frequency in classification), quantile calibration (the one-sided `P(y ≤ q_p)` against `p`)

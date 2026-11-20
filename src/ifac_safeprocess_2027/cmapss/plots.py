@@ -21,8 +21,8 @@ which units are worth looking at: it takes already-standardized
 trajectories, already-trained labelled models, and the three units to
 draw.
 
-It also draws the calibration curves of several models on one axes, from
-coverage already computed over seeds by `calibration.interval_coverage_curve`.
+It also draws the calibration curves of several models on one axes, each
+already computed over seeds by `calibration.calibration_curve`.
 """
 
 from __future__ import annotations
@@ -334,24 +334,26 @@ _IDEAL_CALIBRATION_LABEL = "Ideal calibration"
 
 
 @dataclass(frozen=True)
-class LabelledCoverage:
+class LabelledCalibrationCurves:
     """A model's calibration curves over seeds, with the label naming it.
 
     Attributes:
         label: The name of the model, shown in the legend, e.g. `"Staged
             MC-Dropout model"`.
-        coverage: The empirical coverage at each nominal level, one row per
-            seed, shape `(n_seeds, n_levels)`.
+        curves: The model's calibration curve on each seed: its empirical
+            coverage at each nominal level, one row per seed, shape
+            `(n_seeds, n_levels)`.
     """
 
     label: str
-    coverage: np.ndarray
+    curves: np.ndarray
 
 
 def plot_calibration_curves(
-    models: Sequence[LabelledCoverage],
+    models: Sequence[LabelledCalibrationCurves],
     levels: Sequence[float],
     *,
+    title: str,
     save_path: Path | None = None,
 ) -> Figure:
     """Plot each model's calibration curve, mean ± std over seeds, on one axes.
@@ -362,8 +364,10 @@ def plot_calibration_curves(
     curve below it is overconfident, one above it underconfident.
 
     Args:
-        models: The models' coverage over seeds, drawn in the order given.
-        levels: The nominal confidence levels the coverage columns belong to.
+        models: The models' calibration curves over seeds, drawn in the
+            order given.
+        levels: The nominal confidence levels the curves' columns belong to.
+        title: The axes' title, naming the data the curves were scored on.
         save_path: Where to save the figure. When omitted, the figure is
             displayed instead.
 
@@ -374,7 +378,7 @@ def plot_calibration_curves(
         ValueError: If `models` is empty.
     """
     if not models:
-        raise ValueError("At least one labelled coverage is required.")
+        raise ValueError("At least one labelled model is required.")
     figure, axes = plt.subplots(figsize=(5.5, 5.0))
     axes.plot(
         [0.0, 1.0],
@@ -385,13 +389,9 @@ def plot_calibration_curves(
     )
     x = np.asarray(levels, dtype=float)
     for labelled in models:
-        coverage = np.atleast_2d(np.asarray(labelled.coverage, dtype=float))
-        mean = coverage.mean(axis=0)
-        std = (
-            coverage.std(axis=0, ddof=1)
-            if coverage.shape[0] > 1
-            else np.zeros_like(mean)
-        )
+        curves = np.atleast_2d(np.asarray(labelled.curves, dtype=float))
+        mean = curves.mean(axis=0)
+        std = curves.std(axis=0, ddof=1) if curves.shape[0] > 1 else np.zeros_like(mean)
         (line,) = axes.plot(x, mean, marker="o", label=labelled.label)
         axes.fill_between(
             x, mean - std, mean + std, color=line.get_color(), alpha=0.2, linewidth=0
@@ -401,7 +401,7 @@ def plot_calibration_curves(
     axes.set_aspect("equal")
     axes.set_xlabel("Nominal confidence level")
     axes.set_ylabel("Empirical coverage")
-    axes.set_title("CMAPSS FD001 test calibration")
+    axes.set_title(title)
     axes.legend(loc="upper left")
     figure.tight_layout()
 
