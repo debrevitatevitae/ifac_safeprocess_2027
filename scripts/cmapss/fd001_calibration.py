@@ -59,26 +59,29 @@ RATES = (0.3, 0.9)
 COLORS = {"joint+mcd": "#2a78d6", "staged+mcd": "#eb6834"}
 """Each model's colour, as in the dropout sensitivity figure."""
 
-LINESTYLES = ("-", "--", "-.")
-"""The line style of each dropout rate, in the order given, cycling past the last."""
+LINESTYLES = {0.3: "-", 0.9: "--"}
+"""The line style of each default dropout rate."""
+
+OTHER_LINESTYLE = "-."
+"""The line style of any dropout rate outside `LINESTYLES`."""
 
 
 @dataclass(frozen=True)
-class CalibrationColumn:
+class RateCalibration:
     """One (model, dropout rate)'s calibration curves over seeds.
 
     Attributes:
         name: The table's column header, e.g. `"joint+mcd p=0.3"`.
-        curves: The curves over seeds, labelled and styled for the figure.
+        labelled: The curves over seeds, labelled and styled for the figure.
     """
 
     name: str
-    curves: LabelledCalibrationCurves
+    labelled: LabelledCalibrationCurves
 
 
 def collect_calibration_curves(
     results_by_rate: Mapping[float, Sequence[SeedComparison]],
-) -> list[CalibrationColumn]:
+) -> list[RateCalibration]:
     """Stack each (model, dropout rate)'s calibration curve over seeds.
 
     Args:
@@ -86,51 +89,55 @@ def collect_calibration_curves(
             dropout rate, at least one seed per rate.
 
     Returns:
-        One `CalibrationColumn` per model per rate, grouped by rate in the
+        One `RateCalibration` per model per rate, grouped by rate in the
         mapping's order and by model in the comparisons' order. Each holds
         curves with shape `(n_seeds, len(CALIBRATION_LEVELS))`, coloured by
-        model and styled by rate.
+        model and styled by the rate's value: `LINESTYLES`, else
+        `OTHER_LINESTYLE`.
     """
-    columns = []
-    for rate_index, (rate, results) in enumerate(results_by_rate.items()):
-        for index, model in enumerate(results[0].models):
-            columns.append(
-                CalibrationColumn(
+    calibrations = []
+    for rate, results in results_by_rate.items():
+        for model_index, model in enumerate(results[0].models):
+            calibrations.append(
+                RateCalibration(
                     name=f"{model.name} p={rate:g}",
-                    curves=LabelledCalibrationCurves(
+                    labelled=LabelledCalibrationCurves(
                         label=f"{model.label.removesuffix(' model')}, p={rate:g}",
                         curves=np.stack(
                             [
-                                np.asarray(result.models[index].calibration_curve)
+                                np.asarray(result.models[model_index].calibration_curve)
                                 for result in results
                             ]
                         ),
                         color=COLORS.get(model.name),
-                        linestyle=LINESTYLES[rate_index % len(LINESTYLES)],
+                        linestyle=LINESTYLES.get(rate, OTHER_LINESTYLE),
                     ),
                 )
             )
-    return columns
+    return calibrations
 
 
-def format_calibration_table(columns: Sequence[CalibrationColumn]) -> str:
-    """Tabulate each column's coverage per nominal level as `mean ± std` over seeds.
+def format_calibration_table(calibrations: Sequence[RateCalibration]) -> str:
+    """Tabulate each (model, rate)'s coverage per nominal level as `mean ± std`.
 
     Args:
-        columns: The (model, rate)s' calibration curves over seeds, from
+        calibrations: The (model, rate)s' calibration curves over seeds, from
             `collect_calibration_curves`, in column order.
 
     Returns:
         A table with one row per level in `CALIBRATION_LEVELS` and one
         column per (model, rate).
     """
-    names = [column.name for column in columns]
+    names = [calibration.name for calibration in calibrations]
     rows = [
         (
             f"{level:.0%}",
-            [_mean_std(column.curves.curves[:, index]) for column in columns],
+            [
+                _mean_std(calibration.labelled.curves[:, level_index])
+                for calibration in calibrations
+            ],
         )
-        for index, level in enumerate(CALIBRATION_LEVELS)
+        for level_index, level in enumerate(CALIBRATION_LEVELS)
     ]
     label_width = max(len("Level"), *(len(label) for label, _ in rows))
     cell_width = max(
@@ -214,13 +221,13 @@ def main() -> None:
             on_run=print_run,
             jobs=args.jobs,
         )
-    columns = collect_calibration_curves(results_by_rate)
+    calibrations = collect_calibration_curves(results_by_rate)
     print(
         f"\nFD001 test coverage per nominal level over {args.seeds} seeds (mean ± std):"
     )
-    print(format_calibration_table(columns))
+    print(format_calibration_table(calibrations))
     plot_calibration_curves(
-        [column.curves for column in columns],
+        [calibration.labelled for calibration in calibrations],
         CALIBRATION_LEVELS,
         title="CMAPSS FD001 test calibration",
         save_path=args.plot_path,

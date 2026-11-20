@@ -416,7 +416,7 @@ def plot_calibration_curves(
     axes.set_xlabel("Nominal confidence level")
     axes.set_ylabel("Empirical coverage")
     axes.set_title(title)
-    axes.legend(loc="upper left")
+    axes.legend(loc="lower right")
     figure.tight_layout()
 
     if save_path is not None:

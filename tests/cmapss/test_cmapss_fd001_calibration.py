@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from types import ModuleType
+from typing import Any
 
 import numpy as np
 
 
-def _seed(
-    base: ModuleType, seed: int, joint: list[float], staged: list[float]
-) -> object:
+def _seed(base: ModuleType, seed: int, joint: list[float], staged: list[float]) -> Any:
     """A seed's comparison holding only the models' calibration curves."""
     return base.SeedComparison(
         seed=seed,
@@ -33,7 +32,7 @@ def _seed(
     )
 
 
-def test_curves_are_grouped_by_rate_coloured_by_method_and_styled_by_rate(
+def test_curves_are_grouped_by_rate_coloured_by_model_and_styled_by_rate(
     cmapss_fd001: ModuleType, cmapss_fd001_calibration: ModuleType
 ) -> None:
     base = cmapss_fd001
@@ -48,15 +47,15 @@ def test_curves_are_grouped_by_rate_coloured_by_method_and_styled_by_rate(
         ],
     }
 
-    columns = cmapss_fd001_calibration.collect_calibration_curves(results_by_rate)
+    calibrations = cmapss_fd001_calibration.collect_calibration_curves(results_by_rate)
 
-    assert [column.name for column in columns] == [
+    assert [calibration.name for calibration in calibrations] == [
         "joint+mcd p=0.3",
         "staged+mcd p=0.3",
         "joint+mcd p=0.9",
         "staged+mcd p=0.9",
     ]
-    curves = [column.curves for column in columns]
+    curves = [calibration.labelled for calibration in calibrations]
     assert [c.label for c in curves] == [
         "Joint MC-Dropout, p=0.3",
         "Staged MC-Dropout, p=0.3",
@@ -74,8 +73,8 @@ def test_table_has_one_column_per_model_and_rate_and_one_row_per_level(
 ) -> None:
     script = cmapss_fd001_calibration
     n_levels = len(script.CALIBRATION_LEVELS)
-    columns = [
-        script.CalibrationColumn(
+    calibrations = [
+        script.RateCalibration(
             name,
             cmapss_plots.LabelledCalibrationCurves(
                 name, np.array([np.full(n_levels, 0.2), np.full(n_levels, 0.4)])
@@ -84,10 +83,29 @@ def test_table_has_one_column_per_model_and_rate_and_one_row_per_level(
         for name in ("joint+mcd p=0.3", "joint+mcd p=0.9")
     ]
 
-    table = script.format_calibration_table(columns).splitlines()
+    table = script.format_calibration_table(calibrations).splitlines()
 
     assert table[0].split() == ["Level", "joint+mcd", "p=0.3", "joint+mcd", "p=0.9"]
     assert len(table) == 1 + n_levels
     # Mean 0.3, sample std 0.1414 over the two seeds.
     assert table[-1].split()[0] == "95%"
     assert table[-1].count("0.3000 ± 0.1414") == 2
+
+
+def test_line_style_follows_the_rate_value_not_its_position(
+    cmapss_fd001: ModuleType, cmapss_fd001_calibration: ModuleType
+) -> None:
+    results_by_rate = {
+        rate: [_seed(cmapss_fd001, 0, [0.1], [0.2])] for rate in (0.9, 0.5, 0.3)
+    }
+
+    styles = {
+        calibration.name: calibration.labelled.linestyle
+        for calibration in cmapss_fd001_calibration.collect_calibration_curves(
+            results_by_rate
+        )
+    }
+
+    assert styles["joint+mcd p=0.3"] == "-"
+    assert styles["joint+mcd p=0.9"] == "--"
+    assert styles["joint+mcd p=0.5"] == "-."
