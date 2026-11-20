@@ -17,11 +17,11 @@ From: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 %post
     export UV_PROJECT_ENVIRONMENT=/opt/venv UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 UV_NO_CACHE=1
     cd /code
-    # deps only, from the lockfile; the project itself comes from the /code bind
-    uv sync --frozen --no-dev --no-install-project
+    # deps from the lockfile + the project as editable; its .pth points at /code/src,
+    # which the runtime /code bind replaces with the live repo
+    uv sync --frozen --no-dev
     # fetch data into a path nothing binds over
-    CMAPSS_CACHE_DIR=/opt/cmapss PYTHONPATH=/code/src \
-        /opt/venv/bin/python -m ifac_safeprocess_2027.cmapss.data --fetch
+    CMAPSS_CACHE_DIR=/opt/cmapss /opt/venv/bin/python -m ifac_safeprocess_2027.cmapss.data --fetch
     chmod -R a+rX /opt/venv /opt/cmapss
 
 %runscript
@@ -29,4 +29,26 @@ From: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
     #   SCRIPT: path relative to scripts/, e.g. cmapss/fd001_base.py
     cd /code
     script="$1"; shift
-    exec uv run --no-dev python "scripts/${script}" "$@"
+    exec uv run --no-sync --no-dev python "scripts/${script}" "$@"
+
+%test
+    # Runs at the end of `apptainer build`, or on demand with `apptainer test`
+    set -eu
+    cd /code
+
+    # 1. locked deps import, JAX sees a backend
+    /opt/venv/bin/python -c "import jax, stagereg, pandas, sklearn, matplotlib, seaborn; print('jax devices:', jax.devices())"
+
+    # 2. data baked in at build time, loads from the cache
+    test -n "$(ls -A /opt/cmapss)"
+    /opt/venv/bin/python -c "
+from ifac_safeprocess_2027.cmapss.data import load_fd001_data, load_fd001_test_data, load_fd001_test_rul
+tr, te, rul = load_fd001_data(), load_fd001_test_data(), load_fd001_test_rul()
+assert tr['unit_id'].nunique() == 100
+assert te['unit_id'].nunique() == 100
+assert len(rul) == 100
+print('FD001 ok:', tr.shape, te.shape, rul.shape)
+"
+
+    # 3. the runscript's launcher works without touching the read-only venv
+    uv run --no-sync --no-dev python -c "import ifac_safeprocess_2027; print('uv run ok')"
