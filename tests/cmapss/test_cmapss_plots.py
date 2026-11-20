@@ -633,3 +633,37 @@ def test_calibration_curves_are_saved_instead_of_shown_with_a_save_path(
 
     assert captured_show == []
     assert save_path.stat().st_size > 0
+
+
+def test_calibration_curves_take_each_models_colour_and_line_style(
+    cmapss_plots: ModuleType, captured_show: list[bool]
+) -> None:
+    from matplotlib.colors import to_hex, to_rgb
+
+    curves = np.array([[0.1, 0.5]])
+
+    figure = cmapss_plots.plot_calibration_curves(
+        [
+            cmapss_plots.LabelledCalibrationCurves(
+                "Joint, p=0.9", curves, color="#2a78d6", linestyle="--"
+            ),
+            cmapss_plots.LabelledCalibrationCurves("Staged, p=0.3", curves),
+        ],
+        (0.1, 0.5),
+        title="FD001 test calibration",
+    )
+
+    (axes,) = figure.axes
+    lines = _lines_by_label(axes)
+    joint = lines["Joint, p=0.9"]
+    assert to_hex(joint.get_color()) == "#2a78d6"
+    assert joint.get_linestyle() == "--"
+    # Unstyled models keep a solid line; the diagonal stays distinct from
+    # dashed curves.
+    assert lines["Staged, p=0.3"].get_linestyle() == "-"
+    assert lines["Ideal calibration"].get_linestyle() == ":"
+    # The band takes its model's colour.
+    np.testing.assert_allclose(
+        axes.collections[0].get_facecolor()[0][:3],
+        to_rgb("#2a78d6"),
+    )

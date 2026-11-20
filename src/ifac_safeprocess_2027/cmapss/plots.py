@@ -343,10 +343,16 @@ class LabelledCalibrationCurves:
         curves: The model's calibration curve on each seed: its empirical
             coverage at each nominal level, one row per seed, shape
             `(n_seeds, n_levels)`.
+        color: The colour of the model's curve and band, any matplotlib
+            colour; `None`, the default, takes the next colour of the cycle.
+        linestyle: The matplotlib line style of the model's curve; solid by
+            default.
     """
 
     label: str
     curves: np.ndarray
+    color: str | None = None
+    linestyle: str = "-"
 
 
 def plot_calibration_curves(
@@ -360,8 +366,9 @@ def plot_calibration_curves(
 
     Each model draws its mean empirical coverage against the nominal
     confidence level, with a band of ± the sample standard deviation over
-    seeds (none for a single seed). The diagonal marks ideal calibration: a
-    curve below it is overconfident, one above it underconfident.
+    seeds (none for a single seed), in the model's colour and line style. The
+    dotted diagonal marks ideal calibration: a curve below it is overconfident,
+    one above it underconfident.
 
     Args:
         models: The models' calibration curves over seeds, drawn in the
@@ -383,7 +390,7 @@ def plot_calibration_curves(
     axes.plot(
         [0.0, 1.0],
         [0.0, 1.0],
-        linestyle="--",
+        linestyle=":",
         color="0.5",
         label=_IDEAL_CALIBRATION_LABEL,
     )
@@ -392,9 +399,16 @@ def plot_calibration_curves(
         curves = np.atleast_2d(np.asarray(labelled.curves, dtype=float))
         mean = curves.mean(axis=0)
         std = curves.std(axis=0, ddof=1) if curves.shape[0] > 1 else np.zeros_like(mean)
-        (line,) = axes.plot(x, mean, marker="o", label=labelled.label)
+        (line,) = axes.plot(
+            x,
+            mean,
+            marker="o",
+            color=labelled.color,
+            linestyle=labelled.linestyle,
+            label=labelled.label,
+        )
         axes.fill_between(
-            x, mean - std, mean + std, color=line.get_color(), alpha=0.2, linewidth=0
+            x, mean - std, mean + std, color=line.get_color(), alpha=0.12, linewidth=0
         )
     axes.set_xlim(0.0, 1.0)
     axes.set_ylim(0.0, 1.0)

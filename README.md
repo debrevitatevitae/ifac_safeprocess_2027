@@ -50,10 +50,10 @@ The metrics scored are:
 
 ### `fd001_calibration.py`
 
-Trains the same two models as `fd001_base.py` and draws their calibration curves on FD001/test in one figure: the empirical coverage of each model's central interval against its nominal confidence level (10% to 90% in steps of 10%, and 95%), mean ± std over seeds, against the diagonal of ideal calibration. It also prints the coverage per level as a table.
+Trains the same two models as `fd001_base.py` at each dropout rate in `--rates` (default 0.3 and 0.9, the same seeds at every rate) and draws their calibration curves on FD001/test in one figure: the empirical coverage of each model's central interval against its nominal confidence level (10% to 90% in steps of 10%, and 95%), mean ± std over seeds, against the diagonal of ideal calibration. The colour marks the model, the line style the dropout rate. It also prints the coverage per level as a table, one column per model and rate.
 
 ```shell
-uv run python scripts/cmapss/fd001_calibration.py --seeds 5 [--jobs 5] [--plot-path calibration.png]
+uv run python scripts/cmapss/fd001_calibration.py --seeds 5 [--rates 0.3 0.9] [--jobs 5] [--plot-path calibration.png]
 ```
 
 ### `fd001_dropout_sensitivity.py`

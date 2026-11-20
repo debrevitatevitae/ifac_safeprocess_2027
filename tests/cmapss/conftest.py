@@ -102,6 +102,12 @@ def cmapss_fd001(cmapss_pipeline: ModuleType) -> ModuleType:
     return _load_script_module("cmapss_fd001", "fd001_base.py")
 
 
+@pytest.fixture(scope="session")
+def cmapss_fd001_calibration(cmapss_pipeline: ModuleType) -> ModuleType:
+    """The calibration curve script."""
+    return _load_script_module("cmapss_fd001_calibration", "fd001_calibration.py")
+
+
 @pytest.fixture
 def offline_fd001(cmapss_pipeline: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """Serve synthetic FD001 splits in place of the cached NASA archive."""
