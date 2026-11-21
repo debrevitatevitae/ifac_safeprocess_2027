@@ -6,6 +6,8 @@ FD001/train units:
 * `joint+mcd` ("joint"): the joint-trained baseline.
 * `staged+mcd` ("staged"): the stage-based model.
 
+Both models use dropout rate `DROPOUT_RATE` (0.9).
+
 Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
 coverage, closed-form CRPS and NLL.
 
@@ -38,9 +40,11 @@ from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
     CyclesPredictive,
     prepare_cmapss_windows,
+    with_dropout_rate,
 )
 from ifac_safeprocess_2027.parallel import add_jobs_argument, process_map
 
+DROPOUT_RATE = 0.9
 FRACTIONS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
 MODELS = ("joint", "staged")
 METRICS = (
@@ -161,7 +165,7 @@ def main() -> None:
     add_jobs_argument(parser)
     args = parser.parse_args()
 
-    config = CmapssConfig()
+    config = with_dropout_rate(CmapssConfig(), DROPOUT_RATE)
     if args.epochs is not None:
         config = dataclasses.replace(
             config,
