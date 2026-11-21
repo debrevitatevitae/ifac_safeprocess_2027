@@ -7,7 +7,7 @@ import re
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -544,3 +544,64 @@ def test_the_joint_model_trains_on_train_and_validation_without_monitoring(
     # The same windows as the staged models see, train and validation.
     n_windows = len(prepared.train_windows) + len(prepared.validation_windows)
     assert sum(batch.inputs.shape[0] for batch in batches) == n_windows
+
+
+def _test_split_of(n_units: int) -> Any:
+    """A stand-in prepared data holding only `n_units` test windows."""
+    return SimpleNamespace(test_windows=np.zeros((n_units, 3, 2)))
+
+
+def test_epistemic_fraction_averages_the_per_unit_epistemic_share(
+    cmapss_fd001: ModuleType,
+) -> None:
+    import jax.numpy as jnp
+    from stagereg.jax import PosteriorPredictive
+
+    # Unit 0: draws 1 and 3, epistemic variance 1, shared aleatoric 1 -> 1/2.
+    # Unit 1: draws 4 and 4, epistemic variance 0 -> 0.
+    predictive = PosteriorPredictive(
+        draws=jnp.array([[1.0, 4.0], [3.0, 4.0]]),
+        aleatoric_variance=jnp.array([1.0, 2.0]),
+    )
+
+    fraction = cmapss_fd001.epistemic_fraction(
+        lambda inputs: predictive, _test_split_of(2)
+    )
+
+    assert fraction == pytest.approx(0.25)
+
+
+def test_a_single_draw_has_a_zero_epistemic_fraction(cmapss_fd001: ModuleType) -> None:
+    import jax.numpy as jnp
+    from stagereg.jax import PosteriorPredictive
+
+    predictive = PosteriorPredictive(
+        draws=jnp.array([[1.0, 4.0]]), aleatoric_variance=jnp.array([[1.0, 2.0]])
+    )
+
+    fraction = cmapss_fd001.epistemic_fraction(
+        lambda inputs: predictive, _test_split_of(2)
+    )
+
+    assert fraction == 0.0
+
+
+def test_epistemic_fraction_averages_per_draw_aleatoric_variances(
+    cmapss_fd001: ModuleType,
+) -> None:
+    import jax.numpy as jnp
+    from stagereg.jax import PosteriorPredictive
+
+    # Shaped like the joint model's output, (draws, units, 1).
+    # Unit 0: epistemic variance 1, mean aleatoric (1 + 3) / 2 = 2 -> 1/3.
+    # Unit 1: epistemic variance 0 -> 0.
+    predictive = PosteriorPredictive(
+        draws=jnp.array([[[1.0], [4.0]], [[3.0], [4.0]]]),
+        aleatoric_variance=jnp.array([[[1.0], [2.0]], [[3.0], [2.0]]]),
+    )
+
+    fraction = cmapss_fd001.epistemic_fraction(
+        lambda inputs: predictive, _test_split_of(2)
+    )
+
+    assert fraction == pytest.approx(1 / 6)

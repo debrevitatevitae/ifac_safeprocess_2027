@@ -6,11 +6,15 @@ Models compared, trained as in `fd001_base.py` for every dropout rate:
 * `staged+mcd` ("staged"): the stage-based model.
 
 Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
-coverage, closed-form CRPS and NLL.
+coverage, NLL and the epistemic fraction, the epistemic share of the predictive
+variance averaged over the test units. At p=0 each model takes a single draw, so
+its epistemic fraction is zero by construction and is left out of the table and
+the figure.
 
-Output: per-run metrics and one mean ± std table per metric printed to the
-console, plus a 1x4 figure with one subplot per metric, the dropout rate on the
-x-axis and one line per model.
+Output: per-run metrics (closed-form CRPS included) and one mean ± std table
+per metric printed to the console, plus a 1x4 figure sized for the full text
+width of a two-column paper, with one subplot per metric, the dropout rate on
+the x-axis and one line per model.
 
 Run it with:
 
@@ -30,7 +34,13 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fd001_base import _train_joint_mcd, _train_staged_mcd, score_on_test_split
+from fd001_base import (
+    _train_joint_mcd,
+    _train_staged_mcd,
+    epistemic_fraction,
+    score_on_test_split,
+)
+from matplotlib.ticker import MultipleLocator
 
 from ifac_safeprocess_2027.cmapss.pipeline import (
     CmapssConfig,
@@ -45,9 +55,11 @@ MODELS = ("joint", "staged")
 METRICS = (
     ("rmse", "RMSE [cycles]"),
     ("coverage", "95% coverage"),
-    ("closed_form_crps", "CRPS [cycles]"),
     ("nll", "NLL"),
+    ("epistemic_fraction", "Epi. fraction"),
 )
+EPISTEMIC_FRACTION = "epistemic_fraction"
+"""The metric undefined at p=0, where each model takes a single draw."""
 COLORS = {"joint": "#2a78d6", "staged": "#eb6834"}
 
 
@@ -65,7 +77,10 @@ def run_one(seed_config: CmapssConfig, p: float) -> dict[str, dict[str, float]]:
     scores = {}
     for name, model in trained.items():
         cycles = CyclesPredictive(model, prepared.target_standardization)
-        scores[name] = metrics = score_on_test_split(cycles, prepared)
+        scores[name] = metrics = {
+            **score_on_test_split(cycles, prepared),
+            EPISTEMIC_FRACTION: epistemic_fraction(cycles, prepared),
+        }
         values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         print(f"[{name} p={p} seed={seed_config.seed}] {values}", flush=True)
     return scores
@@ -95,12 +110,20 @@ def run(config: CmapssConfig, seeds: int, rates: list[float], jobs: int = 1) -> 
     return results
 
 
+def _scored_rates(key: str, rates: list[float]) -> list[float]:
+    """The rates `key` is reported at: all but p=0 for the epistemic fraction."""
+    return [p for p in rates if p != 0.0] if key == EPISTEMIC_FRACTION else rates
+
+
 def summarize(results: dict, rates: list[float]) -> None:
     """Print mean ± std over seeds per (metric, model, p)."""
     for key, label in METRICS:
         print(f"\n{label}")
         print("p      " + "  ".join(f"{m:>18}" for m in MODELS))
         for p in rates:
+            if p not in _scored_rates(key, rates):
+                print(f"{p:<5}  " + "  ".join(f"{'—':>18}" for _ in MODELS))
+                continue
             cells = []
             for m in MODELS:
                 v = np.array([r[key] for r in results[m][p]])
@@ -111,19 +134,25 @@ def summarize(results: dict, rates: list[float]) -> None:
 
 def plot(results: dict, rates: list[float], save_path: Path | None) -> None:
     """1x4 line subplots: metric vs p, one line per model, ± std band."""
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8), constrained_layout=True)
+    fig, axes = plt.subplots(
+        1, 4, figsize=(7.0, 1.9), sharex=True, constrained_layout=True
+    )
     for ax, (key, label) in zip(axes, METRICS, strict=True):
-        for m in MODELS:
-            v = np.array([[r[key] for r in results[m][p]] for p in rates])
+        scored = _scored_rates(key, rates)
+        for m in MODELS if scored else ():
+            v = np.array([[r[key] for r in results[m][p]] for p in scored])
             mean = v.mean(axis=1)
             std = v.std(axis=1, ddof=1) if v.shape[1] > 1 else np.zeros_like(mean)
-            ax.plot(rates, mean, marker="o", ms=5, lw=2, color=COLORS[m], label=m)
-            ax.fill_between(rates, mean - std, mean + std, color=COLORS[m], alpha=0.15)
+            ax.plot(scored, mean, marker="o", ms=5, lw=2, color=COLORS[m], label=m)
+            ax.fill_between(scored, mean - std, mean + std, color=COLORS[m], alpha=0.15)
         if key == "coverage":
             ax.axhline(0.95, color="0.5", lw=1, ls="--")
+        if key == EPISTEMIC_FRACTION:
+            ax.set_ylim(0.0, 1.0)
         ax.set_title(label)
         ax.set_xlabel("dropout rate p")
-        ax.set_xticks(rates)
+        ax.xaxis.set_major_locator(MultipleLocator(0.3))
+        ax.xaxis.set_minor_locator(MultipleLocator(0.1))
         ax.grid(alpha=0.3)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)

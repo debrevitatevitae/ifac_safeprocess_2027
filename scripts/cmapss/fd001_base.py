@@ -152,6 +152,26 @@ def score_on_test_split(
     )
 
 
+def epistemic_fraction(model: nnx.Module, prepared: PreparedCmapssData) -> float:
+    """Return the model's mean epistemic fraction over the FD001 test units.
+
+    A unit's epistemic fraction is its epistemic share of the predictive
+    variance, `Var_epi / (Var_epi + Var_ale)`, by the law of total variance:
+    the variance of the draws' means over the variance of the mixture. A model
+    with a single draw has none, so its fraction is zero.
+
+    Args:
+        model: A model mapping windows to a `PosteriorPredictive`.
+        prepared: The prepared FD001 windows whose test windows are predicted.
+
+    Returns:
+        The epistemic fraction averaged over the test units, in `[0, 1]`.
+    """
+    summary = model(prepared.test_windows).moment_matched()
+    epistemic = summary.epistemic_variance
+    return float(jnp.mean(epistemic / (epistemic + summary.aleatoric_variance)))
+
+
 @dataclass(frozen=True)
 class ModelResult:
     """One trained model of a comparison and its test-split scores.

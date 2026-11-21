@@ -8,12 +8,14 @@ FD001/train units:
 
 Both models use dropout rate `DROPOUT_RATE` (0.9).
 
-Metrics scored on FD001/test, mean ± std over seeds: RMSE, 95% interval
-coverage, closed-form CRPS and NLL.
+Metrics scored on FD001/test, mean ± std over seeds: 95% interval coverage
+and the epistemic fraction, the epistemic share of the predictive variance
+averaged over the test units.
 
-Output: per-run metrics and one mean ± std table per metric printed to the
-console, plus a 1x4 figure with one subplot per metric, the fraction of
-training units on the x-axis and one line per model.
+Output: per-run metrics (RMSE, closed-form CRPS and NLL included) and one
+mean ± std table per metric printed to the console, plus a 2x1 figure sized for
+one column of a two-column paper, with one subplot per metric stacked over a
+shared x-axis, the fraction of training units, and one line per model.
 
 Run it with:
 
@@ -33,7 +35,13 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fd001_base import _train_joint_mcd, _train_staged_mcd, score_on_test_split
+from fd001_base import (
+    _train_joint_mcd,
+    _train_staged_mcd,
+    epistemic_fraction,
+    score_on_test_split,
+)
+from matplotlib.ticker import MultipleLocator
 
 from ifac_safeprocess_2027.cmapss.data import load_fd001_data
 from ifac_safeprocess_2027.cmapss.pipeline import (
@@ -48,10 +56,8 @@ DROPOUT_RATE = 0.9
 FRACTIONS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
 MODELS = ("joint", "staged")
 METRICS = (
-    ("rmse", "RMSE [cycles]"),
     ("coverage", "95% coverage"),
-    ("closed_form_crps", "CRPS [cycles]"),
-    ("nll", "NLL"),
+    ("epistemic_fraction", "Epistemic fraction"),
 )
 COLORS = {"joint": "#2a78d6", "staged": "#eb6834"}
 
@@ -68,7 +74,10 @@ def run_one(
     scores = {}
     for name, model in trained.items():
         cycles = CyclesPredictive(model, prepared.target_standardization)
-        scores[name] = metrics = score_on_test_split(cycles, prepared)
+        scores[name] = metrics = {
+            **score_on_test_split(cycles, prepared),
+            "epistemic_fraction": epistemic_fraction(cycles, prepared),
+        }
         values = ", ".join(f"{k}={v:.4f}" for k, v in metrics.items())
         print(
             f"[{name} f={f} units={len(train_units)} seed={seed_config.seed}] {values}",
@@ -126,9 +135,11 @@ def summarize(results: dict, fractions: list[float]) -> None:
 
 
 def plot(results: dict, fractions: list[float], save_path: Path | None) -> None:
-    """1x4 line subplots: metric vs f, one line per model, ± std band."""
+    """2x1 line subplots over a shared x-axis: metric vs f, one line per model."""
     percent = [100 * f for f in fractions]
-    fig, axes = plt.subplots(1, 4, figsize=(16, 3.8), constrained_layout=True)
+    fig, axes = plt.subplots(
+        2, 1, figsize=(3.4, 3.6), sharex=True, constrained_layout=True
+    )
     for ax, (key, label) in zip(axes, METRICS, strict=True):
         for m in MODELS:
             v = np.array([[r[key] for r in results[m][f]] for f in fractions])
@@ -140,12 +151,15 @@ def plot(results: dict, fractions: list[float], save_path: Path | None) -> None:
             )
         if key == "coverage":
             ax.axhline(0.95, color="0.5", lw=1, ls="--")
+        if key == "epistemic_fraction":
+            ax.set_ylim(0.0, 1.0)
         ax.set_title(label)
-        ax.set_xlabel("training units [%]")
-        ax.set_xticks(percent)
         ax.grid(alpha=0.3)
         for side in ("top", "right"):
             ax.spines[side].set_visible(False)
+    axes[-1].set_xlabel("training units [%]")
+    axes[-1].xaxis.set_major_locator(MultipleLocator(20))
+    axes[-1].xaxis.set_minor_locator(MultipleLocator(10))
     axes[0].legend(frameon=False)
     if save_path is None:
         plt.show()

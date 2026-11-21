@@ -58,11 +58,11 @@ uv run python scripts/cmapss/fd001_calibration.py --seeds 5 [--rates 0.3 0.9] [-
 
 ### `fd001_dropout_sensitivity.py`
 
-Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the dropout rate used in the MC dropout layers of the LSTM.
+Analyzes the sensitivity of the joint and staged models to the dropout rate used in the MC dropout layers of the LSTM. It plots RMSE, 95% coverage, NLL and the epistemic fraction (the epistemic share of the predictive variance, see `GLOSSARY.md`) against the rate, in a figure sized for the full text width of a two-column paper. At rate 0 each model takes a single draw, so the epistemic fraction is left out there.
 
 ### `fd001_train_units_sensitivity.py`
 
-Analyzes the sensitivity of each of the metrics in `fd001_base.py` to the units used to train the networks.
+Analyzes the sensitivity of the joint and staged models to the units used to train the networks, at dropout rate 0.9. It plots 95% coverage and the epistemic fraction, stacked over the fraction of training units, in a figure sized for one column of a two-column paper.
 
 ### `fd003_ood.py`
 

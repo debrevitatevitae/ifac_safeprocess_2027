@@ -46,6 +46,10 @@ _Avoid_: Confidence interval (this is an interval over a predicted value, not ov
 The 2.5% and 97.5% quantiles, at each window, of a posterior predictive's draws' means, ignoring their aleatoric variance: how much the dropout draws disagree about the mean, i.e. the model's uncertainty about the function itself. It lies inside the predictive interval, but the gap between the two is not the aleatoric part, since quantile widths do not add.
 _Avoid_: Model uncertainty interval, credible interval
 
+**Epistemic fraction**:
+A model's epistemic share of its predictive variance, averaged over the test units: per unit, `Var_epi / (Var_epi + Var_ale)`, where the epistemic variance is the variance of the draws' means and the aleatoric variance is the draws' average aleatoric variance; by the law of total variance, the two add up to the mixture's variance. It is zero for a single-draw model, such as one with dropout rate 0, and approaches 1 when the draws' disagreement dominates the predicted noise. Unlike the *epistemic band*, it splits the variance exactly, since variances add where quantile widths do not.
+_Avoid_: Epistemic ratio (ambiguous with epistemic over aleatoric), model uncertainty share
+
 **Held-out residuals**:
 A mean model's squared residuals on windows it never trained on: in `fd001_base.py`, the validation split's. The staged model's Gamma variance stage fits these rather than the in-sample residuals on the train split, which understate the held-out error and so give too small a variance.
 _Avoid_: Validation residuals (ambiguous with monitoring), out-of-fold residuals (no folds here), OOF
