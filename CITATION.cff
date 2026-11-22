@@ -1,0 +1,47 @@
+cff-version: 1.2.0
+message: >-
+  If you use this code, please cite the paper below (preferred-citation) and,
+  to point at the exact code version, this software archive.
+type: software
+title: "ifac_safeprocess_2027"
+abstract: >-
+  Code for the paper "Stage-based training of probabilistic neural networks for
+  prognostics: an application to the NASA CMAPSS dataset", submitted to the
+  IFAC SafeProcess 2027 conference. It compares joint and stage-based training
+  of mean-variance estimation networks on the NASA C-MAPSS FD001 dataset, built
+  on the stagereg library.
+authors:
+  - family-names: "Tosti Balducci"
+    given-names: "Giorgio"
+    # orcid: "https://orcid.org/XXXX-XXXX-XXXX-XXXX"
+repository-code: "https://github.com/debrevitatevitae/ifac_safeprocess_2027"
+license: BSD-3-Clause
+version: "0.1.0"
+# Concept DOI: always resolves to the latest Zenodo release.
+doi: "10.5281/zenodo.24443665"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.24443665"
+    description: "Concept DOI for all versions of the software"
+  - type: doi
+    value: "10.5281/zenodo.24443666"
+    description: "Version DOI for the ifac-safeprocess-pre release"
+keywords:
+  - prognostics
+  - remaining useful life
+  - uncertainty quantification
+  - mean-variance estimation
+  - stage-based training
+  - C-MAPSS
+preferred-citation:
+  type: conference-paper
+  title: >-
+    Stage-based training of probabilistic neural networks for prognostics: an
+    application to the NASA CMAPSS dataset
+  authors:
+    - family-names: "Tosti Balducci"
+      given-names: "Giorgio"
+  conference:
+    name: "IFAC SafeProcess 2027"
+  year: 2027
+  # Once published, add: collection-title, start, end, doi.

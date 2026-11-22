@@ -1,10 +1,19 @@
 [project]
 name = "ifac-safeprocess-2027"
 version = "0.1.0"
-description = "Add your description here"
+description = "Code for the IFAC SafeProcess 2027 paper on stage-based training of probabilistic neural networks for prognostics on NASA C-MAPSS."
 readme = "README.md"
 authors = [
-    { name = "debrevitatevitae", email = "giotb92@gmail.com" }
+    { name = "Giorgio Tosti Balducci", email = "giotb92@gmail.com" }
+]
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+keywords = [
+    "prognostics",
+    "remaining useful life",
+    "uncertainty quantification",
+    "mean-variance estimation",
+    "C-MAPSS",
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -14,6 +23,10 @@ dependencies = [
     "seaborn>=0.13.2",
     "stagereg[jax]==0.7.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/debrevitatevitae/ifac_safeprocess_2027"
+Changelog = "https://github.com/debrevitatevitae/ifac_safeprocess_2027/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ifac-safeprocess-2027 = "ifac_safeprocess_2027:main"

@@ -7,6 +7,11 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
 
 ### Added
 
+- `CITATION.cff`, with the paper as preferred citation, and project metadata
+  (description, author name, license, keywords, URLs) in `pyproject.toml`.
+- The Zenodo DOI (10.5281/zenodo.24443665): a badge and a Citation section with
+  a BibTeX entry in `README.md`, and the concept and version DOIs in
+  `CITATION.cff`.
 - The NASA CMAPSS FD001 scripts (`scripts/cmapss/`) and their tests
   (`tests/cmapss/`), moved from `stagereg`'s CMAPSS example. The archive
   environment variables are now `CMAPSS_CACHE_DIR` and `CMAPSS_ARCHIVE`, and

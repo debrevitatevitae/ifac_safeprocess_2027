@@ -1,5 +1,7 @@
 # Code for the paper "Stage-based training of probabilistic neural networks for prognostics: an application to the NASA CMAPSS dataset"
 
+[![DOI](https://zenodo.org/badge/1453820781.svg)](https://doi.org/10.5281/zenodo.24443665)
+
 The repository contains the code for the results of the paper submitted to the [IFAC SafeProcess 2027 conference](https://conferences.ifac-control.org/safeprocess2027/), built on the [`stagereg` library](https://github.com/GroupiSP/stagereg) for stage-based probabilistic regression.
 
 Install the environment with the [uv package manager](https://docs.astral.sh/uv/):
@@ -72,3 +74,26 @@ Studies the out-of-distribution (OOD) performance of the baseline and stage-trai
 - 95% interval coverage
 - Continuous Ranked Probability Score (CRPS)
 - Ratio between the 95% interval width on FD003 test units and the 95% interval width on FD001 test units.
+
+## Citation
+
+If you use this code, please cite it through its Zenodo archive. The DOI below
+always resolves to the latest release; each release also has its own version DOI,
+listed on the [Zenodo record](https://doi.org/10.5281/zenodo.24443665).
+
+```bibtex
+@misc{tostibalducci2027code,
+  author       = {Tosti Balducci, Giorgio},
+  title        = {{ifac\_safeprocess\_2027}: Code for ``Stage-based training of
+                  probabilistic neural networks for prognostics: an application
+                  to the NASA CMAPSS dataset''},
+  year         = {2026},
+  publisher    = {Zenodo},
+  howpublished = {\url{https://github.com/debrevitatevitae/ifac_safeprocess_2027}},
+  doi          = {10.5281/zenodo.24443665}
+}
+```
+
+The citation metadata is also in [`CITATION.cff`](CITATION.cff), which GitHub
+renders as a "Cite this repository" button. The paper's reference will be added
+here once it is published.
