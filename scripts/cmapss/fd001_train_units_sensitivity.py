@@ -152,7 +152,7 @@ def plot(results: dict, fractions: list[float], save_path: Path | None) -> None:
         if key == "coverage":
             ax.axhline(0.95, color="0.5", lw=1, ls="--")
         if key == "epistemic_fraction":
-            ax.set_ylim(0.0, 1.0)
+            ax.set_ylim(0.0, 0.5)
         ax.set_title(label)
         ax.grid(alpha=0.3)
         for side in ("top", "right"):
