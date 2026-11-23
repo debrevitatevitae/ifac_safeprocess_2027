@@ -94,7 +94,7 @@ The metrics scored are:
 - Negative Log-Likelihood (NLL)
 
 ```shell
-apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_base.py --seeds 5 --jobs 5 --plot-path img/rul_fd001.png
+apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_base.py --seeds 10 --jobs 10 --plot-path img/rul_fd001.png
 ```
 
 ### `fd001_calibration.py`
@@ -110,7 +110,7 @@ apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_calibration.py --seeds 5 --j
 Analyzes the sensitivity of the joint and staged models to the dropout rate used in the MC dropout layers of the LSTM. It plots RMSE, 95% coverage, NLL and the epistemic fraction (the epistemic share of the predictive variance, see `GLOSSARY.md`) against the rate, in a figure sized for the full text width of a two-column paper. At rate 0 each model takes a single draw, so the epistemic fraction is left out there.
 
 ```shell
-apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_dropout_sensitivity.py --seeds 5 --jobs 8 --plot-path img/fd001_dropout_sensitivity.pdf
+apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_dropout_sensitivity.py --seeds 5 --jobs 30 --plot-path img/fd001_dropout_sensitivity.pdf
 ```
 
 ### `fd001_train_units_sensitivity.py`
@@ -118,7 +118,7 @@ apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_dropout_sensitivity.py --see
 Analyzes the sensitivity of the joint and staged models to the units used to train the networks, at dropout rate 0.9. It plots 95% coverage and the epistemic fraction, stacked over the fraction of training units, in a figure sized for one column of a two-column paper.
 
 ```shell
-apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_train_units_sensitivity.py --seeds 5 --jobs 8 --plot-path img/fd001_train_units_sensitivity.pdf
+apptainer run -B .:/code uv-cmapss.sif cmapss/fd001_train_units_sensitivity.py --seeds 5 --jobs 28 --plot-path img/fd001_train_units_sensitivity.pdf
 ```
 
 ## Citation
