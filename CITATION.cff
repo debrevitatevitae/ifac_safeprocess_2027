@@ -26,6 +26,12 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.24443666"
     description: "Version DOI for the ifac-safeprocess-pre release"
+  - type: doi
+    value: "10.5281/zenodo.24465173"
+    description: "Concept DOI for all versions of the Apptainer image"
+  - type: doi
+    value: "10.5281/zenodo.24465174"
+    description: "Version DOI for the ifac-safeprocess-pre Apptainer image"
 keywords:
   - prognostics
   - remaining useful life

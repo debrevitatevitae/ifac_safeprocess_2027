@@ -12,6 +12,22 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
 - The Zenodo DOI (10.5281/zenodo.24443665): a badge and a Citation section with
   a BibTeX entry in `README.md`, and the concept and version DOIs in
   `CITATION.cff`.
+- The Apptainer image for `ifac-safeprocess-pre`, published on Zenodo
+  (concept DOI 10.5281/zenodo.24465173), linked from `README.md` and listed in
+  `CITATION.cff`.
+- `docs/releasing-the-image.md`: how to build, check and publish the Apptainer
+  image on Zenodo.
+- A guard in the Apptainer runscript: it refuses to run when the bound
+  repository's `uv.lock` differs from the image's, or when the repository is not
+  bound to `/code`.
+
+### Changed
+
+- `README.md`: the Apptainer image is the way to reproduce the results; running
+  with `uv` directly moves to a "Without Apptainer" section.
+- `uv-cmapss.def` pins the base image by digest
+  (`uv:0.9.30-python3.13-bookworm-slim`), the one the published image was built
+  from.
 
 ### Removed
 
