@@ -1,10 +1,17 @@
 Bootstrap: docker
-From: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+# Pinned by digest (a multi-arch index: amd64 and arm64), so a rebuild starts from the
+# same base image: uv:0.9.30-python3.13-bookworm-slim (Python 3.13.11, Debian 12).
+# Apptainer rejects a tag and a digest together, so the tag is only noted here.
+# The image published for ifac-safeprocess-pre was built on 2026-11-20 from the floating tag `uv:python3.13-bookworm-slim`, which resolved to
+# this digest (see its `org.opencontainers.image.base.digest` label); it predates
+# this pin and the uv.lock guard in %runscript.
+From: ghcr.io/astral-sh/uv@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
 %files
     pyproject.toml /code/pyproject.toml
     uv.lock        /code/uv.lock
     README.md      /code/README.md
+    LICENSE        /code/LICENSE
     src            /code/src
 
 %environment
@@ -20,14 +27,30 @@ From: ghcr.io/astral-sh/uv:python3.13-bookworm-slim
     # deps from the lockfile + the project as editable; its .pth points at /code/src,
     # which the runtime /code bind replaces with the live repo
     uv sync --frozen --no-dev
+    # record the lockfile the venv was built from, for the guard in %runscript
+    sha256sum uv.lock | cut -d' ' -f1 > /opt/uv.lock.sha256
     # fetch data into a path nothing binds over
     CMAPSS_CACHE_DIR=/opt/cmapss /opt/venv/bin/python -m ifac_safeprocess_2027.cmapss.data --fetch
-    chmod -R a+rX /opt/venv /opt/cmapss
+    chmod -R a+rX /opt/venv /opt/cmapss /opt/uv.lock.sha256
 
 %runscript
     # Usage: apptainer run -B .:/code uv-cmapss.sif SCRIPT [ARGS...]
     #   SCRIPT: path relative to scripts/, e.g. cmapss/fd001_base.py
     cd /code
+    if [ ! -d scripts ]; then
+        echo "error: no scripts/ in /code; run from the repo root with -B .:/code" >&2
+        exit 1
+    fi
+    # the venv is baked in and never re-synced: refuse a checkout locked differently
+    if [ "$(sha256sum uv.lock | cut -d' ' -f1)" != "$(cat /opt/uv.lock.sha256)" ]; then
+        echo "error: the bound uv.lock differs from the one this image was built from;" >&2
+        echo "       use the image whose version matches your checkout, or rebuild it" >&2
+        exit 1
+    fi
+    if [ $# -eq 0 ]; then
+        echo "usage: apptainer run -B .:/code uv-cmapss.sif SCRIPT [ARGS...]" >&2
+        exit 1
+    fi
     script="$1"; shift
     exec uv run --no-sync --no-dev python "scripts/${script}" "$@"
 
