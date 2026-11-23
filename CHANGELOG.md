@@ -3,7 +3,7 @@
 All notable changes to `ifac_safeprocess_2027` are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## [Unreleased]
 
 ### Added
 
@@ -12,6 +12,16 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
 - The Zenodo DOI (10.5281/zenodo.24443665): a badge and a Citation section with
   a BibTeX entry in `README.md`, and the concept and version DOIs in
   `CITATION.cff`.
+
+### Removed
+
+- The FD003 out-of-distribution script (`scripts/cmapss/fd003_ood.py`), which
+  trained on FD001/train and scored on FD003/test.
+
+## [ifac-safeprocess-pre] - 2026-11-22
+
+### Added
+
 - The NASA CMAPSS FD001 scripts (`scripts/cmapss/`) and their tests
   (`tests/cmapss/`), moved from `stagereg`'s CMAPSS example. The archive
   environment variables are now `CMAPSS_CACHE_DIR` and `CMAPSS_ARCHIVE`, and
@@ -42,3 +52,6 @@ All notable changes to `ifac_safeprocess_2027` are recorded here. The format fol
 - `fd003_ood.py` drops `--metrics-plot-path`: `--plot-path` now saves both
   figures, the metrics one as `<stem>_metrics<suffix>`, so the metrics figure is
   no longer lost when only `--plot-path` is passed.
+
+[Unreleased]: https://github.com/debrevitatevitae/ifac_safeprocess_2027/compare/ifac-safeprocess-pre...HEAD
+[ifac-safeprocess-pre]: https://github.com/debrevitatevitae/ifac_safeprocess_2027/releases/tag/ifac-safeprocess-pre

@@ -66,15 +66,6 @@ Analyzes the sensitivity of the joint and staged models to the dropout rate used
 
 Analyzes the sensitivity of the joint and staged models to the units used to train the networks, at dropout rate 0.9. It plots 95% coverage and the epistemic fraction, stacked over the fraction of training units, in a figure sized for one column of a two-column paper.
 
-### `fd003_ood.py`
-
-Studies the out-of-distribution (OOD) performance of the baseline and stage-trained model. The models are trained as usual on the FD001/train sub-dataset, but evaluated on the FD003/test sub-dataset, which contains two different failure modes. The metrics scored are:
-
-- Root Mean Squared Error (RMSE)
-- 95% interval coverage
-- Continuous Ranked Probability Score (CRPS)
-- Ratio between the 95% interval width on FD003 test units and the 95% interval width on FD001 test units.
-
 ## Citation
 
 If you use this code, please cite it through its Zenodo archive. The DOI below
